@@ -222,8 +222,8 @@ zephyr-nanopb-textformat/
   zephyr/module.yml         name: nanopb_textformat
   include/nanopb_textformat.h   public API + the PB_TF_DEFINE X-macro machinery
   src/nanopb_textformat_common.c        name lookup, iterator glue, pb_tf_strerror, pb_tf_clear
-  src/nanopb_textformat_parse.c         lexer + recursive-descent parser + value binding
-  src/nanopb_textformat_print.c         recursive printer, driven by cbprintf
+  src/nanopb_textformat_parse.c         lexer + iterative state machine + value binding
+  src/nanopb_textformat_print.c         iterative printer, driven by cbprintf
   tests/textformat/         one ztest app, five suites, + testcase.yaml
   docs/dialect.md           which spec productions are in, which are out, and why
   ws/                       gitignored west workspace (see Verification)
@@ -298,7 +298,7 @@ Plus `PB_TF_FIELD_COUNT(FIELDLIST)`, mirroring zephlet's `ZLET_SHELL_FIELD_COUNT
 
 ### 2. Parser
 
-Single pass, recursive descent, no heap, no scratch buffers — strings and bytes unescape **directly
+Single pass, no heap, no scratch buffers, **and no recursion** (see below) — strings and bytes unescape **directly
 into the destination**, bounded by `iter.data_size`. Writes go through `iter.pData` (identical to
 `pField` for STATIC, but it is what nanopb uses and degrades better).
 
@@ -328,8 +328,54 @@ Value writing dispatches on `row->vtype` **and** `iter.data_size`, mirroring
 `int_size`, `PB_WITHOUT_64BIT` and `PB_CONVERT_DOUBLE_FLOAT` all correct (fact 12), and it means the
 lexer accumulator uses `pb_tf_uint64_t`/`pb_tf_int64_t` aliases rather than hard-coded `uint64_t`.
 Negative literals are rejected for the unsigned vtypes. `STRING` uses nanopb's exact bound —
-`len + 1 <= data_size`, i.e. `data_size - 1` characters, NUL always written. `MESSAGE` recurses under
-`CONFIG_NANOPB_TEXTFORMAT_MAX_DEPTH`.
+`len + 1 <= data_size`, i.e. `data_size - 1` characters, NUL always written.
+
+**No recursion — revised during milestone 3.** A submessage value is itself a field body, so the
+natural shape is mutual recursion under `CONFIG_NANOPB_TEXTFORMAT_MAX_DEPTH`. That was the original
+design and it was wrong for this target. Measured at `-Os` on Cortex-M3, the cycle
+(`parse_fields` 32 B + `store_value` 56 B + `parse_value` 56 B) cost **144 bytes per level**: ~1.2 KB
+at the default depth of 8 and ~4.6 KB at the Kconfig maximum of 32, against a
+`CONFIG_SHELL_STACK_SIZE` that defaults to **2048** (`subsys/shell/Kconfig:50`) — and the intended
+consumer *is* a shell command. A depth cap bounds the level count but converts to bytes nowhere, so
+raising it silently spends stack. It is also a **MISRA C:2025 Rule 17.2** (Required, decidable)
+violation, which no deviation would be worth taking for a library aimed at embedded targets.
+
+The parser is therefore a three-state machine (`FIELD` → `VALUE` → `AFTER`) over an explicit array
+of frames held in `struct pb_tf_parser`:
+
+```c
+struct pb_tf_frame {
+    const pb_tf_msg_t   *tf;          /* message this body fills   */
+    void                *msg;
+    const pb_tf_field_t *row;         /* field in progress         */
+    void                *commit_ptr;  /* parent's pSize, or NULL   */
+    pb_size_t            commit_val;
+    uint8_t              commit_kind; /* PRESENT | SIZE | NONE     */
+    uint8_t              flags;       /* BRACED | IN_LIST          */
+};                                    /* 20 bytes on a 32-bit target */
+```
+
+A submessage pushes a frame and re-enters `FIELD`; its closing brace commits, pops, and resumes the
+parent in `AFTER` — exactly where a returning recursive call would have landed. The one subtlety
+recursion handled for free: a repeated submessage's element count must not include an element whose
+body failed halfway, so the **commit is deferred** and carried on the child frame rather than applied
+at the call site.
+
+Measured cost after the change — `132 + 20n` bytes, in **one** `-fstack-usage` line:
+
+| `MAX_DEPTH` | recursive | iterative |
+|---|---|---|
+| 1 | ~176 B | **152 B** |
+| 8 (default) | ~1.2 KB | **296 B** |
+| 32 (maximum) | ~4.6 KB | **776 B** |
+
+Verified against the linked image, not just the object file: `pb_tf_parse` makes no self-call, and
+every callee is a leaf helper. (Unrelocated `bl` placeholders in a `.o` disassemble as apparent
+self-calls, which is misleading — check the ELF.)
+
+The printer inherits the same rule in milestone 5. Its depth is bounded by the `.proto` at build
+time rather than by input, but a second stack-growth mechanism is not worth keeping for symmetry's
+sake.
 
 ```c
 typedef struct { pb_tf_err_t code; uint16_t offset; const char *field; } pb_tf_status_t;

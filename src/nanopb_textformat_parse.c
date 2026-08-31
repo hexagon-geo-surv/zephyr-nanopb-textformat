@@ -5,10 +5,24 @@
 
 /**
  * @file
- * @brief Text-format parser: lexer, recursive descent, and value binding.
+ * @brief Text-format parser: lexer, state machine, and value binding.
  *
  * Single pass, no heap and no scratch buffers -- values are written straight
  * into the destination struct through nanopb's field iterator.
+ *
+ * Submessages are walked with an explicit frame stack rather than by recursion.
+ * The obvious implementation is mutually recursive -- a submessage value is
+ * itself a field body -- but that makes stack use a function of the input:
+ * measured at -Os on Cortex-M3 the cycle cost 144 bytes per level, so the
+ * default depth of 8 wanted ~1.2 KB and the Kconfig maximum of 32 wanted
+ * ~4.6 KB, against a CONFIG_SHELL_STACK_SIZE that defaults to 2048. A depth
+ * cap bounds the level count, but nothing there converts levels into bytes,
+ * and raising the cap silently spends stack.
+ *
+ * Here the frames are an array inside struct pb_tf_parser, so the whole parse
+ * costs one frame whose size is a compile-time constant visible in a single
+ * -fstack-usage line. It also keeps the library clear of MISRA C:2025
+ * Rule 17.2, which forbids recursion direct or indirect.
  */
 
 #include <string.h>
@@ -16,6 +30,49 @@
 #include <pb_common.h>
 
 #include "nanopb_textformat_priv.h"
+
+/** @name What to write once a field's value is known to be complete. */
+/**@{*/
+#define PB_TF_CM_NONE    0U
+/** Set the has_ bit of an optional field. */
+#define PB_TF_CM_PRESENT 1U
+/** Store a pb_size_t: a repeated count, or a oneof's which_ tag. */
+#define PB_TF_CM_SIZE    2U
+/**@}*/
+
+/** @name Frame flags. */
+/**@{*/
+/** This body is terminated by '}' rather than by end of input. */
+#define PB_TF_FR_BRACED  0x01U
+/** A '[' list is open, so a value is followed by ',' or ']'. */
+#define PB_TF_FR_IN_LIST 0x02U
+/**@}*/
+
+/**
+ * One open message body.
+ *
+ * The commit fields describe what the *parent* owes once this body closes.
+ * Deferring matters for a repeated submessage: the element count must not
+ * include an element whose body failed halfway through, so the increment waits
+ * for the closing brace. A scalar needs no deferral -- success is known
+ * immediately -- but travels the same path for uniformity.
+ */
+struct pb_tf_frame {
+	/** Descriptor of the message this body fills. */
+	const pb_tf_msg_t *tf;
+	/** The struct being filled. */
+	void *msg;
+	/** Field currently being parsed, for list continuation and diagnostics. */
+	const pb_tf_field_t *row;
+	/** Where to write on completion: an iterator's pSize, or NULL. */
+	void *commit_ptr;
+	/** Value for PB_TF_CM_SIZE. */
+	pb_size_t commit_val;
+	/** One of PB_TF_CM_*. */
+	uint8_t commit_kind;
+	/** PB_TF_FR_* */
+	uint8_t flags;
+};
 
 /** Parser state: the input, a cursor into it, and where to report errors. */
 struct pb_tf_parser {
@@ -25,13 +82,14 @@ struct pb_tf_parser {
 	const char *p;
 	/** Caller's status block, or NULL. */
 	pb_tf_status_t *status;
-	/** Submessages currently open, bounded by PB_TF_MAX_DEPTH. */
-	unsigned int depth;
+	/** Index of the innermost open body in @ref stack. */
+	unsigned int top;
+	/**
+	 * Slot 0 is the outermost message, so PB_TF_MAX_DEPTH submessages fit
+	 * above it and the cap is reached when @ref top would exceed it.
+	 */
+	struct pb_tf_frame stack[PB_TF_MAX_DEPTH + 1U];
 };
-
-/* Recursion: a submessage value is itself a field body. */
-static pb_tf_err_t pb_tf_parse_fields(struct pb_tf_parser *ps, const pb_tf_msg_t *tf, void *msg,
-				      bool braced);
 
 /** A scanned integer literal: magnitude, sign and the base it was written in. */
 struct pb_tf_num {
@@ -234,8 +292,8 @@ static bool pb_tf_vtype_is_signed(uint8_t vtype)
  * (-fshort-enums), and PB_CONVERT_DOUBLE_FLOAT all come out correct.
  */
 static pb_tf_err_t pb_tf_write_int(struct pb_tf_parser *ps, const pb_tf_field_t *row,
-				   const pb_field_iter_t *it, void *dest,
-				   const struct pb_tf_num *n, const char *at)
+				   pb_size_t data_size, void *dest, const struct pb_tf_num *n,
+				   const char *at)
 {
 	/*
 	 * A field wider than this build's accumulator, i.e. an int64 field under
@@ -245,7 +303,7 @@ static pb_tf_err_t pb_tf_write_int(struct pb_tf_parser *ps, const pb_tf_field_t 
 	 * PB_TF_ERR_INTERNAL for a data_size that matches no integer width at
 	 * all, which really would mean a descriptor mismatch.
 	 */
-	if (it->data_size > sizeof(pb_tf_uint64_t)) {
+	if (data_size > sizeof(pb_tf_uint64_t)) {
 		return pb_tf_fail(ps, PB_TF_ERR_UNSUPPORTED, at, row->name);
 	}
 
@@ -270,13 +328,13 @@ static pb_tf_err_t pb_tf_write_int(struct pb_tf_parser *ps, const pb_tf_field_t 
 			svalue = (pb_tf_int64_t)n->mag;
 		}
 
-		if (it->data_size == sizeof(pb_tf_int64_t)) {
+		if (data_size == sizeof(pb_tf_int64_t)) {
 			clamped = *(pb_tf_int64_t *)dest = svalue;
-		} else if (it->data_size == sizeof(int32_t)) {
+		} else if (data_size == sizeof(int32_t)) {
 			clamped = *(int32_t *)dest = (int32_t)svalue;
-		} else if (it->data_size == sizeof(int_least16_t)) {
+		} else if (data_size == sizeof(int_least16_t)) {
 			clamped = *(int_least16_t *)dest = (int_least16_t)svalue;
-		} else if (it->data_size == sizeof(int_least8_t)) {
+		} else if (data_size == sizeof(int_least8_t)) {
 			clamped = *(int_least8_t *)dest = (int_least8_t)svalue;
 		} else {
 			return pb_tf_fail(ps, PB_TF_ERR_INTERNAL, at, row->name);
@@ -301,13 +359,13 @@ static pb_tf_err_t pb_tf_write_int(struct pb_tf_parser *ps, const pb_tf_field_t 
 	pb_tf_uint64_t value = n->mag;
 	pb_tf_uint64_t clamped;
 
-	if (it->data_size == sizeof(pb_tf_uint64_t)) {
+	if (data_size == sizeof(pb_tf_uint64_t)) {
 		clamped = *(pb_tf_uint64_t *)dest = value;
-	} else if (it->data_size == sizeof(uint32_t)) {
+	} else if (data_size == sizeof(uint32_t)) {
 		clamped = *(uint32_t *)dest = (uint32_t)value;
-	} else if (it->data_size == sizeof(uint_least16_t)) {
+	} else if (data_size == sizeof(uint_least16_t)) {
 		clamped = *(uint_least16_t *)dest = (uint_least16_t)value;
-	} else if (it->data_size == sizeof(uint_least8_t)) {
+	} else if (data_size == sizeof(uint_least8_t)) {
 		clamped = *(uint_least8_t *)dest = (uint_least8_t)value;
 	} else {
 		return pb_tf_fail(ps, PB_TF_ERR_INTERNAL, at, row->name);
@@ -322,7 +380,7 @@ static pb_tf_err_t pb_tf_write_int(struct pb_tf_parser *ps, const pb_tf_field_t 
 
 /** Parse a bool: true/false/True/False/t/f, or the integers 1 and 0. */
 static pb_tf_err_t pb_tf_write_bool(struct pb_tf_parser *ps, const pb_tf_field_t *row,
-				    const pb_field_iter_t *it, void *dest)
+				    pb_size_t data_size, void *dest)
 {
 	const char *start = ps->p;
 	bool value;
@@ -353,7 +411,7 @@ static pb_tf_err_t pb_tf_write_bool(struct pb_tf_parser *ps, const pb_tf_field_t
 		value = (n.mag == 1U);
 	}
 
-	if (it->data_size != sizeof(bool)) {
+	if (data_size != sizeof(bool)) {
 		return pb_tf_fail(ps, PB_TF_ERR_INTERNAL, start, row->name);
 	}
 
@@ -362,55 +420,10 @@ static pb_tf_err_t pb_tf_write_bool(struct pb_tf_parser *ps, const pb_tf_field_t
 	return PB_TF_OK;
 }
 
-/**
- * Parse a "{ ... }" submessage body into @p dest.
- *
- * The braces are required here even though the colon before them is optional:
- * text format's only other Message delimiters are angle brackets, which are out
- * of scope. @p dest is the submessage struct, so the recursion needs no offset
- * arithmetic of its own.
- *
- * Note what is deliberately absent: @p dest is not cleared. A singular or
- * optional submessage mentioned twice therefore merges, which is what text
- * format asks for. A repeated one is cleared per element by its caller.
- */
-static pb_tf_err_t pb_tf_parse_submsg(struct pb_tf_parser *ps, const pb_tf_field_t *row, void *dest)
-{
-	pb_tf_err_t err;
 
-	if (row->sub == NULL) {
-		/* PB_TF_DEFINE fills this in for every MESSAGE/MSG_W_CB row. */
-		return pb_tf_fail(ps, PB_TF_ERR_INTERNAL, ps->p, row->name);
-	}
-
-	/*
-	 * Check before descending, not after: each level costs a stack frame, so
-	 * the limit has to stop the call rather than report it afterwards.
-	 */
-	if (ps->depth >= (unsigned int)PB_TF_MAX_DEPTH) {
-		return pb_tf_fail(ps, PB_TF_ERR_DEPTH, ps->p, row->name);
-	}
-
-	if (*ps->p != '{') {
-		return pb_tf_fail(ps, PB_TF_ERR_SYNTAX, ps->p, row->name);
-	}
-	ps->p++;
-
-	ps->depth++;
-	err = pb_tf_parse_fields(ps, row->sub, dest, true);
-	ps->depth--;
-
-	return err;
-}
-
-/**
- * Parse one value of @p row's type into @p dest.
- *
- * @p dest is passed in rather than taken from the iterator because a repeated
- * field writes into element n, not the head of the array.
- */
-static pb_tf_err_t pb_tf_parse_value(struct pb_tf_parser *ps, const pb_tf_field_t *row,
-				     const pb_field_iter_t *it, void *dest)
+/** Parse one non-submessage value of @p row's type into @p dest. */
+static pb_tf_err_t pb_tf_parse_scalar(struct pb_tf_parser *ps, const pb_tf_field_t *row,
+				      pb_size_t data_size, void *dest)
 {
 	const char *start = ps->p;
 	struct pb_tf_num n;
@@ -418,7 +431,7 @@ static pb_tf_err_t pb_tf_parse_value(struct pb_tf_parser *ps, const pb_tf_field_
 
 	switch (row->vtype) {
 	case PB_TF_VT_BOOL:
-		return pb_tf_write_bool(ps, row, it, dest);
+		return pb_tf_write_bool(ps, row, data_size, dest);
 
 	case PB_TF_VT_ENUM:
 	case PB_TF_VT_UENUM:
@@ -448,7 +461,7 @@ static pb_tf_err_t pb_tf_parse_value(struct pb_tf_parser *ps, const pb_tf_field_
 		     (*ps->p == 'F'))) {
 			return pb_tf_fail(ps, PB_TF_ERR_TYPE, start, row->name);
 		}
-		return pb_tf_write_int(ps, row, it, dest, &n, start);
+		return pb_tf_write_int(ps, row, data_size, dest, &n, start);
 
 	case PB_TF_VT_FLOAT:
 	case PB_TF_VT_DOUBLE:
@@ -464,61 +477,71 @@ static pb_tf_err_t pb_tf_parse_value(struct pb_tf_parser *ps, const pb_tf_field_
 		/* TODO(milestone 4): quoting and escape sequences. */
 		return pb_tf_fail(ps, PB_TF_ERR_UNSUPPORTED, start, row->name);
 
-	case PB_TF_VT_MESSAGE:
-	case PB_TF_VT_MSG_W_CB:
-		/*
-		 * MSG_W_CB is just MESSAGE with a pb_callback_t ahead of it in the
-		 * struct. nanopb emits that member before the has_ bit and derives
-		 * size_offset from the latter, so the callback sits strictly below
-		 * pSize and writing through pData can never disturb it.
-		 */
-		return pb_tf_parse_submsg(ps, row, dest);
-
 	default:
+		/* MESSAGE and MSG_W_CB never reach here; EXTENSION is unreachable. */
 		return pb_tf_fail(ps, PB_TF_ERR_INTERNAL, start, row->name);
 	}
 }
 
-/**
- * Parse one value and store it according to @p row's repetition rule.
- *
- * The iterator is resolved per occurrence: pb_field_iter_find() is cheap, and
- * re-resolving keeps this correct for a field mentioned more than once.
+/*
+ * ---------------------------------------------------------------------------
+ * Field storage
+ * ---------------------------------------------------------------------------
  */
-static pb_tf_err_t pb_tf_store_value(struct pb_tf_parser *ps, const pb_tf_msg_t *tf, void *msg,
-				     const pb_tf_field_t *row)
+
+/** Where one occurrence of a field is to be written, and what it owes on success. */
+struct pb_tf_slot {
+	void *dest;
+	pb_size_t data_size;
+	void *commit_ptr;
+	pb_size_t commit_val;
+	uint8_t commit_kind;
+};
+
+/**
+ * Resolve @p row against @p msg: find the destination for one occurrence and
+ * work out what completing it must record.
+ *
+ * The iterator is resolved per occurrence rather than cached, which keeps a
+ * field mentioned several times correct and costs only a short scan.
+ */
+static pb_tf_err_t pb_tf_resolve_slot(struct pb_tf_parser *ps, const pb_tf_msg_t *tf, void *msg,
+				      const pb_tf_field_t *row, struct pb_tf_slot *out)
 {
 	pb_field_iter_t it;
-	pb_tf_err_t err;
 
 	if (!pb_field_iter_begin(&it, tf->desc, msg) || !pb_field_iter_find(&it, row->tag)) {
 		return pb_tf_fail(ps, PB_TF_ERR_INTERNAL, ps->p, row->name);
 	}
 
+	out->data_size = it.data_size;
+	out->commit_ptr = NULL;
+	out->commit_val = 0U;
+	out->commit_kind = PB_TF_CM_NONE;
+
 	switch (PB_TF_HT(row->rules)) {
 	case PB_TF_HT_REQUIRED:
 	case PB_TF_HT_SINGULAR:
 		/*
-		 * pSize is NULL for these (pb_common.c:74-117 leaves it unset
-		 * when size_offset is 0), so it must not be touched. Repeating
-		 * such a field simply overwrites, which for a submessage is the
-		 * merge semantics text format asks for.
+		 * pSize is NULL for these -- pb_common.c leaves it unset when
+		 * size_offset is 0 -- so it must not be touched. Repeating such
+		 * a field overwrites, which for a submessage is the merge
+		 * semantics text format asks for.
 		 */
-		return pb_tf_parse_value(ps, row, &it, it.pData);
+		out->dest = it.pData;
+		break;
 
 	case PB_TF_HT_OPTIONAL:
 		if (it.pSize == NULL) {
 			return pb_tf_fail(ps, PB_TF_ERR_INTERNAL, ps->p, row->name);
 		}
-		err = pb_tf_parse_value(ps, row, &it, it.pData);
-		if (err == PB_TF_OK) {
-			*(bool *)it.pSize = true;
-		}
-		return err;
+		out->dest = it.pData;
+		out->commit_ptr = it.pSize;
+		out->commit_kind = PB_TF_CM_PRESENT;
+		break;
 
 	case PB_TF_HT_REPEATED: {
 		pb_size_t n;
-		void *slot;
 
 		if (it.pSize == NULL) {
 			return pb_tf_fail(ps, PB_TF_ERR_INTERNAL, ps->p, row->name);
@@ -534,15 +557,12 @@ static pb_tf_err_t pb_tf_store_value(struct pb_tf_parser *ps, const pb_tf_msg_t 
 		 * Clear the slot first so an appended element cannot inherit
 		 * bytes from a previous, longer occupant.
 		 */
-		slot = (char *)it.pData + ((size_t)n * (size_t)it.data_size);
-		(void)memset(slot, 0, it.data_size);
-
-		err = pb_tf_parse_value(ps, row, &it, slot);
-		if (err == PB_TF_OK) {
-			/* Commit only on success, so a failed value is not counted. */
-			*(pb_size_t *)it.pSize = (pb_size_t)(n + 1U);
-		}
-		return err;
+		out->dest = (char *)it.pData + ((size_t)n * (size_t)it.data_size);
+		(void)memset(out->dest, 0, it.data_size);
+		out->commit_ptr = it.pSize;
+		out->commit_val = (pb_size_t)(n + 1U);
+		out->commit_kind = PB_TF_CM_SIZE;
+		break;
 	}
 
 	case PB_TF_HT_ONEOF:
@@ -556,126 +576,254 @@ static pb_tf_err_t pb_tf_store_value(struct pb_tf_parser *ps, const pb_tf_msg_t 
 		if (*(pb_size_t *)it.pSize != (pb_size_t)row->tag) {
 			(void)memset(it.pData, 0, it.data_size);
 		}
-		err = pb_tf_parse_value(ps, row, &it, it.pData);
-		if (err == PB_TF_OK) {
-			*(pb_size_t *)it.pSize = (pb_size_t)row->tag;
-		}
-		return err;
+		out->dest = it.pData;
+		out->commit_ptr = it.pSize;
+		out->commit_val = (pb_size_t)row->tag;
+		out->commit_kind = PB_TF_CM_SIZE;
+		break;
 
 	default:
 		/* FIXARRAY; pb_tf_shape_supported() rejects it before we get here. */
 		return pb_tf_fail(ps, PB_TF_ERR_UNSUPPORTED, ps->p, row->name);
 	}
+
+	return PB_TF_OK;
+}
+
+/** Record a completed field. A no-op for SINGULAR and REQUIRED. */
+static void pb_tf_commit(void *ptr, pb_size_t val, uint8_t kind)
+{
+	switch (kind) {
+	case PB_TF_CM_PRESENT:
+		*(bool *)ptr = true;
+		break;
+	case PB_TF_CM_SIZE:
+		*(pb_size_t *)ptr = val;
+		break;
+	default:
+		break;
+	}
+}
+
+/**
+ * Open a submessage body as a new frame.
+ *
+ * The depth check comes before the brace check so that an over-deep input
+ * reports PB_TF_ERR_DEPTH rather than a syntax error, and before any state
+ * changes so the frame stack cannot be left half-pushed.
+ */
+static pb_tf_err_t pb_tf_push(struct pb_tf_parser *ps, const pb_tf_field_t *row,
+			      const struct pb_tf_slot *slot)
+{
+	struct pb_tf_frame *fr;
+
+	if (row->sub == NULL) {
+		/* PB_TF_DEFINE fills this in for every MESSAGE/MSG_W_CB row. */
+		return pb_tf_fail(ps, PB_TF_ERR_INTERNAL, ps->p, row->name);
+	}
+
+	if (ps->top >= (unsigned int)PB_TF_MAX_DEPTH) {
+		return pb_tf_fail(ps, PB_TF_ERR_DEPTH, ps->p, row->name);
+	}
+
+	/* The colon is optional before a submessage; the braces are not. */
+	if (*ps->p != '{') {
+		return pb_tf_fail(ps, PB_TF_ERR_SYNTAX, ps->p, row->name);
+	}
+	ps->p++;
+
+	ps->top++;
+	fr = &ps->stack[ps->top];
+	fr->tf = row->sub;
+	fr->msg = slot->dest;
+	fr->row = NULL;
+	fr->commit_ptr = slot->commit_ptr;
+	fr->commit_val = slot->commit_val;
+	fr->commit_kind = slot->commit_kind;
+	fr->flags = PB_TF_FR_BRACED;
+
+	/*
+	 * Note what is deliberately absent: the body is not cleared. A singular
+	 * or optional submessage mentioned twice therefore merges, which is what
+	 * text format asks for; a repeated one was cleared per element by
+	 * pb_tf_resolve_slot().
+	 */
+
+	return PB_TF_OK;
 }
 
 /*
  * ---------------------------------------------------------------------------
- * Message body
+ * The state machine
+ *
+ * Three states cycle per field: FIELD reads a name and decides whether a list
+ * follows, VALUE stores one value or opens a submessage, and AFTER handles the
+ * list and field separators. A submessage pushes a frame and re-enters FIELD;
+ * its closing brace commits, pops, and resumes the parent in AFTER -- which is
+ * exactly where a returning recursive call would have landed.
  * ---------------------------------------------------------------------------
  */
 
-/**
- * Parse a sequence of fields.
- *
- * When @p braced, a '}' ends the body and is consumed; otherwise end of input
- * does. Runs to the terminator, so the caller only has to check for trailing
- * junk once.
- */
-static pb_tf_err_t pb_tf_parse_fields(struct pb_tf_parser *ps, const pb_tf_msg_t *tf, void *msg,
-				      bool braced)
+#define PB_TF_ST_FIELD 0U
+#define PB_TF_ST_VALUE 1U
+#define PB_TF_ST_AFTER 2U
+
+static pb_tf_err_t pb_tf_run(struct pb_tf_parser *ps)
 {
+	unsigned int state = PB_TF_ST_FIELD;
+
 	while (true) {
-		const char *fstart;
-		size_t nlen;
-		const pb_tf_field_t *row;
+		struct pb_tf_frame *fr = &ps->stack[ps->top];
 		pb_tf_err_t err;
 
-		pb_tf_skip_ws(ps);
+		switch (state) {
+		case PB_TF_ST_FIELD: {
+			const char *fstart;
+			size_t nlen;
+			const pb_tf_field_t *row;
 
-		if (braced && (*ps->p == '}')) {
-			ps->p++;
-			return PB_TF_OK;
-		}
+			pb_tf_skip_ws(ps);
 
-		if (*ps->p == '\0') {
-			if (braced) {
-				/* Unterminated body. */
-				return pb_tf_fail(ps, PB_TF_ERR_SYNTAX, ps->p, NULL);
+			if (*ps->p == '}') {
+				if ((fr->flags & PB_TF_FR_BRACED) == 0U) {
+					return pb_tf_fail(ps, PB_TF_ERR_SYNTAX, ps->p, NULL);
+				}
+				ps->p++;
+
+				if (ps->top == 0U) {
+					/* Outermost body; the caller checks for trailing junk. */
+					return PB_TF_OK;
+				}
+
+				pb_tf_commit(fr->commit_ptr, fr->commit_val, fr->commit_kind);
+				ps->top--;
+				state = PB_TF_ST_AFTER;
+				break;
 			}
-			return PB_TF_OK;
-		}
 
-		fstart = ps->p;
-		nlen = pb_tf_scan_ident(ps);
-		if (nlen == 0U) {
-			return pb_tf_fail(ps, PB_TF_ERR_SYNTAX, fstart, NULL);
-		}
+			if (*ps->p == '\0') {
+				if ((fr->flags & PB_TF_FR_BRACED) != 0U) {
+					/* Unterminated body. */
+					return pb_tf_fail(ps, PB_TF_ERR_SYNTAX, ps->p, NULL);
+				}
+				/* Only the outermost body may be unbraced. */
+				return PB_TF_OK;
+			}
 
-		row = pb_tf_field_find(tf, fstart, nlen);
-		if (row == NULL) {
-			return pb_tf_fail(ps, PB_TF_ERR_UNKNOWN_FIELD, fstart, NULL);
-		}
+			fstart = ps->p;
+			nlen = pb_tf_scan_ident(ps);
+			if (nlen == 0U) {
+				return pb_tf_fail(ps, PB_TF_ERR_SYNTAX, fstart, NULL);
+			}
 
-		/* POINTER, CALLBACK, FIXARRAY and EXTENSION shapes, as a runtime error. */
-		if (!pb_tf_shape_supported(row)) {
-			return pb_tf_fail(ps, PB_TF_ERR_UNSUPPORTED, fstart, row->name);
-		}
+			row = pb_tf_field_find(fr->tf, fstart, nlen);
+			if (row == NULL) {
+				return pb_tf_fail(ps, PB_TF_ERR_UNKNOWN_FIELD, fstart, NULL);
+			}
 
-		pb_tf_skip_ws(ps);
+			/* POINTER, CALLBACK, FIXARRAY and EXTENSION, as a runtime error. */
+			if (!pb_tf_shape_supported(row)) {
+				return pb_tf_fail(ps, PB_TF_ERR_UNSUPPORTED, fstart, row->name);
+			}
 
-		/* The colon is optional before a submessage, required otherwise. */
-		if (*ps->p == ':') {
-			ps->p++;
-		} else if (!pb_tf_vtype_is_msg(row->vtype)) {
-			return pb_tf_fail(ps, PB_TF_ERR_SYNTAX, ps->p, row->name);
-		}
+			pb_tf_skip_ws(ps);
 
-		pb_tf_skip_ws(ps);
-
-		if (*ps->p == '[') {
-			if (PB_TF_HT(row->rules) != PB_TF_HT_REPEATED) {
+			/* The colon is optional before a submessage, required otherwise. */
+			if (*ps->p == ':') {
+				ps->p++;
+			} else if (!pb_tf_vtype_is_msg(row->vtype)) {
 				return pb_tf_fail(ps, PB_TF_ERR_SYNTAX, ps->p, row->name);
 			}
 
-			ps->p++;
 			pb_tf_skip_ws(ps);
 
-			if (*ps->p == ']') {
-				/* "x: []" is legal and means nothing to append. */
-				ps->p++;
-			} else {
-				while (true) {
-					err = pb_tf_store_value(ps, tf, msg, row);
-					if (err != PB_TF_OK) {
-						return err;
-					}
+			fr->row = row;
+			fr->flags &= (uint8_t)~PB_TF_FR_IN_LIST;
+			state = PB_TF_ST_VALUE;
 
-					pb_tf_skip_ws(ps);
-
-					if (*ps->p == ',') {
-						ps->p++;
-						pb_tf_skip_ws(ps);
-						continue;
-					}
-					if (*ps->p == ']') {
-						ps->p++;
-						break;
-					}
-
+			if (*ps->p == '[') {
+				if (PB_TF_HT(row->rules) != PB_TF_HT_REPEATED) {
 					return pb_tf_fail(ps, PB_TF_ERR_SYNTAX, ps->p, row->name);
 				}
+
+				ps->p++;
+				pb_tf_skip_ws(ps);
+
+				if (*ps->p == ']') {
+					/* "x: []" is legal and appends nothing. */
+					ps->p++;
+					state = PB_TF_ST_AFTER;
+				} else {
+					fr->flags |= PB_TF_FR_IN_LIST;
+				}
 			}
-		} else {
-			err = pb_tf_store_value(ps, tf, msg, row);
+			break;
+		}
+
+		case PB_TF_ST_VALUE: {
+			struct pb_tf_slot slot;
+
+			err = pb_tf_resolve_slot(ps, fr->tf, fr->msg, fr->row, &slot);
 			if (err != PB_TF_OK) {
 				return err;
 			}
+
+			if (pb_tf_vtype_is_msg(fr->row->vtype)) {
+				/*
+				 * MSG_W_CB is MESSAGE with a pb_callback_t ahead
+				 * of it in the struct. nanopb emits that member
+				 * before the has_ bit and derives size_offset
+				 * from the latter, so the callback sits strictly
+				 * below pSize and writing through pData can
+				 * never disturb it.
+				 */
+				err = pb_tf_push(ps, fr->row, &slot);
+				if (err != PB_TF_OK) {
+					return err;
+				}
+				state = PB_TF_ST_FIELD;
+				break;
+			}
+
+			err = pb_tf_parse_scalar(ps, fr->row, slot.data_size, slot.dest);
+			if (err != PB_TF_OK) {
+				return err;
+			}
+
+			pb_tf_commit(slot.commit_ptr, slot.commit_val, slot.commit_kind);
+			state = PB_TF_ST_AFTER;
+			break;
 		}
 
-		/* Field separators are optional in text format. */
-		pb_tf_skip_ws(ps);
-		if ((*ps->p == ',') || (*ps->p == ';')) {
-			ps->p++;
+		case PB_TF_ST_AFTER:
+		default:
+			if ((fr->flags & PB_TF_FR_IN_LIST) != 0U) {
+				pb_tf_skip_ws(ps);
+
+				if (*ps->p == ',') {
+					ps->p++;
+					pb_tf_skip_ws(ps);
+					state = PB_TF_ST_VALUE;
+					break;
+				}
+
+				if (*ps->p != ']') {
+					return pb_tf_fail(ps, PB_TF_ERR_SYNTAX, ps->p,
+							  fr->row->name);
+				}
+
+				ps->p++;
+				fr->flags &= (uint8_t)~PB_TF_FR_IN_LIST;
+			}
+
+			/* Field separators are optional in text format. */
+			pb_tf_skip_ws(ps);
+			if ((*ps->p == ',') || (*ps->p == ';')) {
+				ps->p++;
+			}
+
+			state = PB_TF_ST_FIELD;
+			break;
 		}
 	}
 }
@@ -684,8 +832,8 @@ pb_tf_err_t pb_tf_parse(const pb_tf_msg_t *tf, void *msg, const char *text, unsi
 			pb_tf_status_t *status)
 {
 	struct pb_tf_parser ps;
+	struct pb_tf_frame *base;
 	pb_tf_err_t err;
-	bool braced = false;
 
 	if (status != NULL) {
 		status->code = PB_TF_OK;
@@ -703,11 +851,20 @@ pb_tf_err_t pb_tf_parse(const pb_tf_msg_t *tf, void *msg, const char *text, unsi
 	ps.text = text;
 	ps.p = text;
 	ps.status = status;
-	ps.depth = 0U;
+	ps.top = 0U;
 
 	if ((flags & PB_TF_NOINIT) == 0U) {
 		pb_tf_clear(tf, msg);
 	}
+
+	base = &ps.stack[0];
+	base->tf = tf;
+	base->msg = msg;
+	base->row = NULL;
+	base->commit_ptr = NULL;
+	base->commit_val = 0U;
+	base->commit_kind = PB_TF_CM_NONE;
+	base->flags = 0U;
 
 	pb_tf_skip_ws(&ps);
 
@@ -718,11 +875,11 @@ pb_tf_err_t pb_tf_parse(const pb_tf_msg_t *tf, void *msg, const char *text, unsi
 	 * token. That is what the trailing-junk check below enforces.
 	 */
 	if (*ps.p == '{') {
-		braced = true;
+		base->flags = PB_TF_FR_BRACED;
 		ps.p++;
 	}
 
-	err = pb_tf_parse_fields(&ps, tf, msg, braced);
+	err = pb_tf_run(&ps);
 	if (err != PB_TF_OK) {
 		return err;
 	}
