@@ -28,9 +28,11 @@ config NANOPB_TEXTFORMAT_FLOAT
 	  libc does not provide, hence the dependency. Printing needs
 	  CBPRINTF_FP_SUPPORT, which this selects.
 
-	  When disabled, a float or double field reports
-	  PB_TF_ERR_NO_FLOAT rather than failing the build, and neither strtod()
-	  nor floating-point formatting is linked in.
+	  When disabled, a float or double field reports PB_TF_ERR_NO_FLOAT in
+	  both directions rather than failing the build, and neither strtod() nor
+	  floating-point formatting is referenced, so neither is linked. Measured
+	  on mps2/an385 at -Os, turning this off took the test image from 102188
+	  to 89740 bytes of text -- about 12 KB.
 
 	  Note: messages with 64-bit fields additionally need
 	  CBPRINTF_FULL_INTEGRAL for correct printing.

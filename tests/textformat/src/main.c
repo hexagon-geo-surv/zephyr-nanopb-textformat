@@ -5,6 +5,11 @@
 
 #include <zephyr/ztest.h>
 
+#if defined(CONFIG_NANOPB_TEXTFORMAT_FLOAT)
+/* isinf()/isnan() for the float assertions. */
+#include <math.h>
+#endif
+
 #include <nanopb_textformat.h>
 #include <pb_common.h>
 
@@ -644,16 +649,15 @@ ZTEST(pb_tf_parse, test_clear_and_noinit)
 	zassert_equal(m.rep_scalar[1], 10);
 }
 
-/* A float field under CONFIG_NANOPB_TEXTFORMAT_FLOAT=n: final behaviour. */
-ZTEST(pb_tf_parse, test_float_field_without_float_support)
+/* A float field follows CONFIG_NANOPB_TEXTFORMAT_FLOAT in both directions. */
+ZTEST(pb_tf_parse, test_float_field_follows_the_build)
 {
 	fx_scalars_t m;
 	pb_tf_status_t st;
 	pb_tf_err_t err = pb_tf_parse(&fx_scalars_t_tf, &m, "f_float: 1.5", 0U, &st);
 
 	if (IS_ENABLED(CONFIG_NANOPB_TEXTFORMAT_FLOAT)) {
-		/* TODO(milestone 6): this becomes PB_TF_OK. */
-		zassert_equal(err, PB_TF_ERR_UNSUPPORTED, "got %s", pb_tf_strerror(err));
+		zassert_equal(err, PB_TF_OK, "%s", pb_tf_strerror(st.code));
 	} else {
 		zassert_equal(err, PB_TF_ERR_NO_FLOAT, "got %s", pb_tf_strerror(err));
 		zassert_str_equal(st.field, "f_float");
@@ -1940,3 +1944,253 @@ ZTEST(pb_tf_roundtrip, test_every_byte_value)
 		roundtrip(&fx_shapes_t_tf, &a, &b, sizeof(a), text, PB_TF_COMPACT);
 	}
 }
+
+/*
+ * ===========================================================================
+ * Milestone 6: floats behind CONFIG_NANOPB_TEXTFORMAT_FLOAT.
+ * ===========================================================================
+ */
+
+ZTEST_SUITE(pb_tf_float, NULL, NULL, NULL, NULL, NULL);
+
+#if defined(CONFIG_NANOPB_TEXTFORMAT_FLOAT)
+
+ZTEST(pb_tf_float, test_literal_forms)
+{
+	static const struct {
+		const char *text;
+		float want;
+	} cases[] = {
+		{"f_float: 0.0", 0.0f},
+		{"f_float: 1.0", 1.0f},
+		{"f_float: -1.5", -1.5f},
+		{"f_float: .5", 0.5f},
+		{"f_float: 1.", 1.0f},
+		{"f_float: -2.5e3", -2500.0f},
+		{"f_float: 2.5E-3", 0.0025f},
+		{"f_float: 1e3", 1000.0f},
+		/* The f suffix, which strtod() does not consume itself. */
+		{"f_float: 1.5f", 1.5f},
+		{"f_float: 1.5F", 1.5f},
+		/* A bare integer is a valid float value. */
+		{"f_float: 7", 7.0f},
+		{"f_float: -7", -7.0f},
+	};
+
+	ARRAY_FOR_EACH(cases, i) {
+		fx_scalars_t m;
+		pb_tf_status_t st;
+		pb_tf_err_t err = pb_tf_parse(&fx_scalars_t_tf, &m, cases[i].text, 0U, &st);
+
+		zassert_equal(err, PB_TF_OK, "'%s': %s", cases[i].text, pb_tf_strerror(st.code));
+		zassert_equal(m.f_float, cases[i].want, "'%s'", cases[i].text);
+	}
+}
+
+ZTEST(pb_tf_float, test_double_keeps_full_precision)
+{
+	fx_scalars_t m;
+	pb_tf_status_t st;
+	pb_tf_err_t err = pb_tf_parse(&fx_scalars_t_tf, &m,
+				      "f_double: 0.1234567890123456789", 0U, &st);
+
+	zassert_equal(err, PB_TF_OK, "%s", pb_tf_strerror(st.code));
+	zassert_true(m.f_double > 0.1234567890123 && m.f_double < 0.1234567890124,
+		     "a double must not be narrowed on the way in");
+}
+
+ZTEST(pb_tf_float, test_inf_and_nan_words)
+{
+	static const char *const infs[] = {
+		"f_float: inf", "f_float: Inf", "f_float: INF",
+		"f_float: infinity", "f_float: Infinity",
+	};
+	static const char *const nans[] = {
+		"f_float: nan", "f_float: NaN", "f_float: NAN",
+	};
+
+	ARRAY_FOR_EACH(infs, i) {
+		fx_scalars_t m;
+
+		zassert_equal(pb_tf_parse(&fx_scalars_t_tf, &m, infs[i], 0U, NULL), PB_TF_OK,
+			      "'%s'", infs[i]);
+		zassert_true(isinf(m.f_float) && (m.f_float > 0.0f), "'%s'", infs[i]);
+	}
+
+	ARRAY_FOR_EACH(nans, i) {
+		fx_scalars_t m;
+
+		zassert_equal(pb_tf_parse(&fx_scalars_t_tf, &m, nans[i], 0U, NULL), PB_TF_OK,
+			      "'%s'", nans[i]);
+		zassert_true(isnan(m.f_float), "'%s'", nans[i]);
+	}
+
+	fx_scalars_t neg;
+
+	zassert_equal(pb_tf_parse(&fx_scalars_t_tf, &neg, "f_float: -inf", 0U, NULL), PB_TF_OK);
+	zassert_true(isinf(neg.f_float) && (neg.f_float < 0.0f));
+}
+
+/*
+ * strtod() accepts more than text format does. The grammar is validated
+ * independently and strtod()'s endptr required to agree, so these are refused
+ * however willing the C library is.
+ */
+ZTEST(pb_tf_float, test_strtod_is_not_trusted)
+{
+	static const struct {
+		const char *text;
+		pb_tf_err_t want;
+	} cases[] = {
+		/* Hex float: strtod() would take it, text format has no such literal. */
+		{"f_float: 0x1p3", PB_TF_ERR_TYPE},
+		{"f_float: +1.0", PB_TF_ERR_SYNTAX},
+		{"f_float: nan(x)", PB_TF_ERR_SYNTAX},
+		{"f_float: .", PB_TF_ERR_SYNTAX},
+		{"f_float: -", PB_TF_ERR_SYNTAX},
+		{"f_float: hello", PB_TF_ERR_TYPE},
+		{"f_float: \"1.0\"", PB_TF_ERR_SYNTAX},
+	};
+
+	ARRAY_FOR_EACH(cases, i) {
+		fx_scalars_t m;
+
+		zassert_equal(pb_tf_parse(&fx_scalars_t_tf, &m, cases[i].text, 0U, NULL),
+			      cases[i].want, "'%s'", cases[i].text);
+	}
+}
+
+/* A typo must not become an infinity. Only the inf/nan words may produce one. */
+ZTEST(pb_tf_float, test_overflow_is_refused)
+{
+	fx_scalars_t m;
+	pb_tf_status_t st;
+
+	/* Exceeds FLT_MAX but is a perfectly good double. */
+	zassert_equal(pb_tf_parse(&fx_scalars_t_tf, &m, "f_float: 1e39", 0U, &st),
+		      PB_TF_ERR_RANGE, "narrowing to float must not yield inf");
+	zassert_str_equal(st.field, "f_float");
+
+	/* Overflows the double itself: strtod returns inf with ERANGE. */
+	zassert_equal(pb_tf_parse(&fx_scalars_t_tf, &m, "f_double: 1e309", 0U, &st),
+		      PB_TF_ERR_RANGE);
+	zassert_str_equal(st.field, "f_double");
+
+	/* At the boundary it still fits. */
+	zassert_equal(pb_tf_parse(&fx_scalars_t_tf, &m, "f_float: 3.4e38", 0U, NULL), PB_TF_OK);
+
+	/* Underflow to zero is left alone, as protoc leaves it. */
+	zassert_equal(pb_tf_parse(&fx_scalars_t_tf, &m, "f_float: 1e-60", 0U, NULL), PB_TF_OK);
+	zassert_equal(m.f_float, 0.0f);
+}
+
+/* %.9g and %.17g are the shortest precisions that round-trip. */
+ZTEST(pb_tf_float, test_print_precision_round_trips)
+{
+	static const char *const inputs[] = {
+		"f_float: 0.1",   "f_float: 1e-30", "f_float: 3.4e38",
+		"f_double: 0.1",  "f_double: 1e-300", "f_double: 1.7976931348623157e308",
+		"f_float: inf",   "f_float: -inf",
+	};
+
+	ARRAY_FOR_EACH(inputs, i) {
+		fx_scalars_t a;
+		fx_scalars_t b;
+		char text[320];
+		pb_tf_status_t st;
+		pb_tf_err_t err;
+
+		err = pb_tf_parse(&fx_scalars_t_tf, &a, inputs[i], 0U, &st);
+		zassert_equal(err, PB_TF_OK, "'%s': %s", inputs[i], pb_tf_strerror(st.code));
+
+		err = pb_tf_print_buf(&fx_scalars_t_tf, &a, text, sizeof(text),
+				      PB_TF_COMPACT | PB_TF_SKIP_DEFAULTS);
+		if (err == PB_TF_ERR_UNSUPPORTED) {
+			/* 64-bit fields under PB_WITHOUT_64BIT; not this test's subject. */
+			ztest_test_skip();
+		}
+		zassert_equal(err, PB_TF_OK, "print '%s': %s", inputs[i], pb_tf_strerror(err));
+
+		err = pb_tf_parse(&fx_scalars_t_tf, &b, text, 0U, &st);
+		zassert_equal(err, PB_TF_OK, "reparse '%s': %s", text, pb_tf_strerror(st.code));
+
+		/* Compared by value, since NaN never equals itself. */
+		zassert_equal(a.f_float, b.f_float, "float lost precision via '%s'", text);
+		zassert_equal(a.f_double, b.f_double, "double lost precision via '%s'", text);
+	}
+}
+
+/* NaN needs its own check: it is never equal to itself, so memcmp is the test. */
+ZTEST(pb_tf_float, test_nan_round_trips)
+{
+	fx_scalars_t a;
+	fx_scalars_t b;
+	char text[320];
+	pb_tf_err_t err;
+
+	zassert_equal(pb_tf_parse(&fx_scalars_t_tf, &a, "f_float: nan", 0U, NULL), PB_TF_OK);
+
+	err = pb_tf_print_buf(&fx_scalars_t_tf, &a, text, sizeof(text),
+			      PB_TF_COMPACT | PB_TF_SKIP_DEFAULTS);
+	if (err == PB_TF_ERR_UNSUPPORTED) {
+		ztest_test_skip();
+	}
+	zassert_equal(err, PB_TF_OK, "%s", pb_tf_strerror(err));
+
+	zassert_equal(pb_tf_parse(&fx_scalars_t_tf, &b, text, 0U, NULL), PB_TF_OK,
+		      "printed NaN must read back: '%s'", text);
+	zassert_true(isnan(b.f_float), "got '%s'", text);
+}
+
+/*
+ * The whole of fx_scalars, which milestone 5 could not round-trip because the
+ * float fields had no parse side. Every ltype in one message, both directions.
+ */
+ZTEST(pb_tf_float, test_full_scalars_round_trip)
+{
+	fx_scalars_t a;
+	fx_scalars_t b;
+
+	if (IS_ENABLED(CONFIG_NANOPB_WITHOUT_64BIT)) {
+		/* 8-byte fields are unrepresentable in this build by design. */
+		ztest_test_skip();
+	}
+
+	roundtrip(&fx_scalars_t_tf, &a, &b, sizeof(a),
+		  "f_int32: -1 f_int64: -2 f_uint32: 3 f_uint64: 4 f_sint32: -5 f_sint64: -6 "
+		  "f_fixed32: 7 f_fixed64: 8 f_sfixed32: -9 f_sfixed64: -10 f_bool: true "
+		  "f_float: 1.5 f_double: 2.25 f_uenum: 2 f_enum: -1 f_string: \"hi\" "
+		  "f_bytes: \"\\001\\002\" f_fixed_bytes: \"abcd\" f_narrow: 127 "
+		  "f_narrow32: 2147483647",
+		  PB_TF_COMPACT);
+
+	roundtrip(&fx_scalars_t_tf, &a, &b, sizeof(a), "f_float: 0.1 f_double: 0.1",
+		  PB_TF_MULTILINE);
+}
+
+#else /* !CONFIG_NANOPB_TEXTFORMAT_FLOAT */
+
+/* With float support off, both directions report it rather than failing to build. */
+ZTEST(pb_tf_float, test_degrades_cleanly)
+{
+	fx_scalars_t m;
+	pb_tf_status_t st;
+	char out[320];
+
+	zassert_equal(pb_tf_parse(&fx_scalars_t_tf, &m, "f_float: 1.5", 0U, &st),
+		      PB_TF_ERR_NO_FLOAT);
+	zassert_str_equal(st.field, "f_float");
+
+	zassert_equal(pb_tf_parse(&fx_scalars_t_tf, &m, "f_double: 1.5", 0U, &st),
+		      PB_TF_ERR_NO_FLOAT);
+
+	/* Integer fields in the same message are unaffected. */
+	zassert_equal(pb_tf_parse(&fx_scalars_t_tf, &m, "f_int32: 5", 0U, &st), PB_TF_OK);
+	zassert_equal(m.f_int32, 5);
+
+	/* Printing a message that has a float field reports it too. */
+	zassert_equal(pb_tf_print_buf(&fx_scalars_t_tf, &m, out, sizeof(out), PB_TF_COMPACT),
+		      PB_TF_ERR_NO_FLOAT);
+}
+
+#endif /* CONFIG_NANOPB_TEXTFORMAT_FLOAT */

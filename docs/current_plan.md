@@ -37,7 +37,7 @@ zephlet consumes it in a follow-up; this repo does not touch zephlet.
 | Shell input | **`SHELL_OPT_ARG_RAW`** — the handler gets the untouched remainder of `cmd_buff`. |
 | Printer | Engine is **`cbprintf`**; flags select multi-line/compact, braces, skip-defaults. Print-all default. |
 | Init | **`pb_tf_parse` clears the struct**, `PB_TF_NOINIT` opts out (mirrors `PB_DECODE_NOINIT`). |
-| Floats | `CONFIG_NANOPB_TEXTFORMAT_FLOAT`, `default y`, `depends on !MINIMAL_LIBC`, `select CBPRINTF_FP_SUPPORT`. |
+| Floats | `CONFIG_NANOPB_TEXTFORMAT_FLOAT`, `default y`, `depends on !MINIMAL_LIBC`, `select CBPRINTF_FP_SUPPORT`. Guarded with `#if`, not `IS_ENABLED`, so `=n` genuinely references neither `strtod()` nor FP formatting — verified: no `strtod` symbol in the image, and 12 KB less text (102188 → 89740 on mps2/an385). |
 | Enums | **Numeric only**, both directions. Rationale below. |
 | Tests | **ztest + twister** on `mps2/an385` and `qemu_x86`, in a gitignored in-repo workspace. |
 | Zephyr | Pinned to **`v4.4.0`** (which pins nanopb `5499fd4c`) — the exact trees every fact below was verified against. |
@@ -424,6 +424,28 @@ Flags: `PB_TF_MULTILINE` (default) / `PB_TF_COMPACT`, `PB_TF_BRACES` (off by def
 output is valid standalone text format), `PB_TF_SKIP_DEFAULTS`. **Print-all is the default** —
 implicit-presence scalars print even when zero, matching today's `get_config`, giving a complete
 picture of the struct, and round-tripping byte-exact into a cleared target.
+
+### Floats — as built in milestone 6
+
+`strtod()` accepts a good deal more than text format does: hex floats (`0x1p3`), a leading `+`, its
+own `inf`/`nan` spellings including `nan(chars)`. So the literal's shape is validated by a small
+independent scanner and **`strtod()`'s endptr is required to agree with it** — the dialect stays a
+strict subset however willing the C library is. The `f`/`F` suffix is handled after that check, since
+`strtod()` will not consume it.
+
+Two overflow paths, both of which would otherwise turn a typo into an infinity:
+
+- a value that exceeds `FLT_MAX` but is a perfectly good double (`1e39`) would become `inf` when
+  narrowed to a 4-byte field;
+- a value that overflows the double itself (`1e309`) comes back from `strtod()` as `inf` with
+  `ERANGE`.
+
+Both report `PB_TF_ERR_RANGE`. **Only the `inf`/`nan` words may produce a non-finite value.**
+Underflow to zero is left alone, as protoc leaves it.
+
+The width, not the vtype, chooses the storage and the print precision — `PB_CONVERT_DOUBLE_FLOAT`
+stores a proto `double` as a C `float`, and printing `%.17g` of a float's worth of information would
+emit noise.
 
 ### 4. API
 

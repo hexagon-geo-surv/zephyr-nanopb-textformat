@@ -27,6 +27,12 @@
 
 #include <string.h>
 
+#if defined(CONFIG_NANOPB_TEXTFORMAT_FLOAT)
+#include <float.h>
+#include <math.h>
+#include <stdlib.h>
+#endif
+
 #include <pb_common.h>
 
 #include "nanopb_textformat_priv.h"
@@ -764,6 +770,246 @@ static pb_tf_err_t pb_tf_write_fixed_bytes(struct pb_tf_parser *ps, const pb_tf_
 	return PB_TF_OK;
 }
 
+/*
+ * ---------------------------------------------------------------------------
+ * Floats
+ * ---------------------------------------------------------------------------
+ */
+
+#if defined(CONFIG_NANOPB_TEXTFORMAT_FLOAT)
+
+/** Case-insensitive compare of a non-NUL-terminated ident against a lowercase literal. */
+static bool pb_tf_ident_ieq(const char *s, size_t len, const char *lit)
+{
+	size_t i;
+
+	if (strlen(lit) != len) {
+		return false;
+	}
+
+	for (i = 0U; i < len; i++) {
+		char a = s[i];
+
+		if ((a >= 'A') && (a <= 'Z')) {
+			a = (char)(a + ('a' - 'A'));
+		}
+		if (a != lit[i]) {
+			return false;
+		}
+	}
+
+	return true;
+}
+
+static bool pb_tf_is_digit(char c)
+{
+	return (c >= '0') && (c <= '9');
+}
+
+/**
+ * End of the decimal float literal starting at @p p, or NULL if there is none.
+ *
+ * This exists because strtod() accepts a good deal more than text format does --
+ * hex floats such as 0x1p3, a leading '+', its own inf/nan spellings including
+ * nan(chars). Rather than trust it, the shape is validated here and strtod()'s
+ * endptr is required to agree, which keeps the dialect a strict subset no matter
+ * what the C library is willing to swallow.
+ *
+ * The 'f' suffix is deliberately not consumed: strtod() would not accept it, so
+ * it is handled by the caller after the endptr check.
+ */
+static const char *pb_tf_float_extent(const char *p)
+{
+	const char *q = p;
+	bool digits = false;
+
+	if (*q == '-') {
+		q++;
+	}
+
+	while (pb_tf_is_digit(*q)) {
+		q++;
+		digits = true;
+	}
+
+	if (*q == '.') {
+		q++;
+		while (pb_tf_is_digit(*q)) {
+			q++;
+			digits = true;
+		}
+	}
+
+	if (!digits) {
+		return NULL;
+	}
+
+	if ((*q == 'e') || (*q == 'E')) {
+		const char *save = q;
+
+		q++;
+		if ((*q == '+') || (*q == '-')) {
+			q++;
+		}
+
+		if (!pb_tf_is_digit(*q)) {
+			/* "1e" is the literal 1 followed by junk, not a float. */
+			q = save;
+		} else {
+			while (pb_tf_is_digit(*q)) {
+				q++;
+			}
+		}
+	}
+
+	return q;
+}
+
+/**
+ * Scan a float literal.
+ *
+ * Accepts the decimal forms, an optional f/F suffix, a bare integer, and
+ * inf / infinity / nan case-insensitively with an optional leading sign --
+ * matching what protoc accepts and what this library's own printer emits.
+ *
+ * @param special set when the value is an infinity or NaN, so the caller knows
+ *                to skip the finite range check.
+ */
+static pb_tf_err_t pb_tf_scan_float(struct pb_tf_parser *ps, const pb_tf_field_t *row, double *out,
+				    bool *special)
+{
+	const char *start = ps->p;
+	const char *end;
+	const char *q = ps->p;
+	char *ep = NULL;
+	bool neg = false;
+	double v;
+
+	*special = false;
+
+	if (*q == '-') {
+		neg = true;
+		q++;
+	}
+
+	if (pb_tf_is_ident_start(*q)) {
+		const char *w = q;
+		size_t len;
+
+		while (pb_tf_is_ident_char(*q)) {
+			q++;
+		}
+		len = (size_t)(q - w);
+
+		if (pb_tf_ident_ieq(w, len, "inf") || pb_tf_ident_ieq(w, len, "infinity")) {
+			*out = neg ? -INFINITY : INFINITY;
+			*special = true;
+			ps->p = q;
+			return PB_TF_OK;
+		}
+
+		if (pb_tf_ident_ieq(w, len, "nan")) {
+			/* A signed NaN is still a NaN; the sign is not meaningful. */
+			*out = (double)NAN;
+			*special = true;
+			ps->p = q;
+			return PB_TF_OK;
+		}
+
+		return pb_tf_fail(ps, PB_TF_ERR_TYPE, start, row->name);
+	}
+
+	end = pb_tf_float_extent(ps->p);
+	if (end == NULL) {
+		return pb_tf_fail(ps, PB_TF_ERR_SYNTAX, start, row->name);
+	}
+
+	v = strtod(ps->p, &ep);
+
+	/*
+	 * If strtod() consumed a different span than the grammar allows, the input
+	 * was something it accepts and text format does not -- a hex float, say.
+	 */
+	if (ep != end) {
+		return pb_tf_fail(ps, PB_TF_ERR_TYPE, start, row->name);
+	}
+
+	ps->p = end;
+
+	/* The optional float suffix, which strtod() leaves behind. */
+	if ((*ps->p == 'f') || (*ps->p == 'F')) {
+		ps->p++;
+	}
+
+	*out = v;
+
+	return PB_TF_OK;
+}
+
+static pb_tf_err_t pb_tf_write_float(struct pb_tf_parser *ps, const pb_tf_field_t *row,
+				     pb_size_t data_size, void *dest)
+{
+	const char *start = ps->p;
+	bool special;
+	double v;
+	pb_tf_err_t err = pb_tf_scan_float(ps, row, &v, &special);
+
+	if (err != PB_TF_OK) {
+		return err;
+	}
+
+	/*
+	 * A literal that overflowed the double itself -- 1e309, say -- comes back
+	 * from strtod() as an infinity with ERANGE. Storing that would silently
+	 * turn a typo into an infinity, so only the inf/nan *words* may produce
+	 * one.
+	 */
+	if (!special && isinf(v)) {
+		return pb_tf_fail(ps, PB_TF_ERR_RANGE, start, row->name);
+	}
+
+	/*
+	 * A proto double is stored as a C float when PB_CONVERT_DOUBLE_FLOAT is
+	 * set, so the width decides here, not the vtype.
+	 */
+	if (data_size == sizeof(float)) {
+		/*
+		 * Narrowing a finite value that exceeds FLT_MAX would quietly
+		 * become an infinity, so it is refused instead. Underflow to zero
+		 * or a subnormal is left alone, as protoc leaves it.
+		 */
+		if (!special && ((v > (double)FLT_MAX) || (v < -(double)FLT_MAX))) {
+			return pb_tf_fail(ps, PB_TF_ERR_RANGE, start, row->name);
+		}
+		*(float *)dest = (float)v;
+		return PB_TF_OK;
+	}
+
+	if (data_size == sizeof(double)) {
+		*(double *)dest = v;
+		return PB_TF_OK;
+	}
+
+	return pb_tf_fail(ps, PB_TF_ERR_INTERNAL, start, row->name);
+}
+
+#else /* !CONFIG_NANOPB_TEXTFORMAT_FLOAT */
+
+/*
+ * With float support off, neither strtod() nor any floating-point formatting is
+ * referenced, so neither is linked in. A float field is a clean runtime error.
+ */
+static pb_tf_err_t pb_tf_write_float(struct pb_tf_parser *ps, const pb_tf_field_t *row,
+				     pb_size_t data_size, void *dest)
+{
+	ARG_UNUSED(data_size);
+	ARG_UNUSED(dest);
+
+	return pb_tf_fail(ps, PB_TF_ERR_NO_FLOAT, ps->p, row->name);
+}
+
+#endif /* CONFIG_NANOPB_TEXTFORMAT_FLOAT */
+
 /** Parse one non-submessage value of @p row's type into @p dest. */
 static pb_tf_err_t pb_tf_parse_scalar(struct pb_tf_parser *ps, const pb_tf_field_t *row,
 				      pb_size_t data_size, void *dest)
@@ -808,11 +1054,7 @@ static pb_tf_err_t pb_tf_parse_scalar(struct pb_tf_parser *ps, const pb_tf_field
 
 	case PB_TF_VT_FLOAT:
 	case PB_TF_VT_DOUBLE:
-		if (!IS_ENABLED(CONFIG_NANOPB_TEXTFORMAT_FLOAT)) {
-			return pb_tf_fail(ps, PB_TF_ERR_NO_FLOAT, start, row->name);
-		}
-		/* TODO(milestone 6): strtod() and the float suffixes. */
-		return pb_tf_fail(ps, PB_TF_ERR_UNSUPPORTED, start, row->name);
+		return pb_tf_write_float(ps, row, data_size, dest);
 
 	case PB_TF_VT_STRING:
 		return pb_tf_write_string(ps, row, data_size, dest);

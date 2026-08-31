@@ -253,25 +253,29 @@ static pb_tf_err_t pb_tf_print_scalar(struct pb_tf_printer *pr, const pb_tf_fiel
 		return pb_tf_print_int(pr, row, data_size, src);
 
 	case PB_TF_VT_FLOAT:
-		if (!IS_ENABLED(CONFIG_NANOPB_TEXTFORMAT_FLOAT)) {
-			return PB_TF_ERR_NO_FLOAT;
-		}
+	case PB_TF_VT_DOUBLE:
+#if defined(CONFIG_NANOPB_TEXTFORMAT_FLOAT)
 		/*
 		 * The precision is not cosmetic: %.9g is the shortest that round
 		 * trips every float, and %.17g every double. Too few digits
 		 * silently loses a value that then fails to compare equal.
+		 *
+		 * The width decides which to use, not the vtype: with
+		 * PB_CONVERT_DOUBLE_FLOAT a proto double is stored as a C float,
+		 * and printing 17 digits of a float's worth of information would
+		 * emit noise.
 		 */
-		return pb_tf_emit(pr, "%.9g", (double)*(const float *)src);
-
-	case PB_TF_VT_DOUBLE:
-		if (!IS_ENABLED(CONFIG_NANOPB_TEXTFORMAT_FLOAT)) {
-			return PB_TF_ERR_NO_FLOAT;
-		}
 		if (data_size == sizeof(float)) {
-			/* PB_CONVERT_DOUBLE_FLOAT stores a proto double as a float. */
 			return pb_tf_emit(pr, "%.9g", (double)*(const float *)src);
 		}
-		return pb_tf_emit(pr, "%.17g", *(const double *)src);
+		if (data_size == sizeof(double)) {
+			return pb_tf_emit(pr, "%.17g", *(const double *)src);
+		}
+		return PB_TF_ERR_INTERNAL;
+#else
+		/* No floating-point formatting is referenced, so none is linked. */
+		return PB_TF_ERR_NO_FLOAT;
+#endif
 
 	case PB_TF_VT_STRING:
 		pb_tf_quoted(pr, (const pb_byte_t *)src, strnlen((const char *)src, data_size));
