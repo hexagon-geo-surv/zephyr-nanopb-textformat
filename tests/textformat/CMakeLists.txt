@@ -17,7 +17,9 @@ include(nanopb)
 # --c-style matches how zephlet generates its messages, so the tests exercise
 # the naming style the real consumer uses.
 set(NANOPB_OPTIONS "--c-style")
-zephyr_nanopb_sources(app src/fixture.proto)
+# fixture.proto is proto3; fixture2.proto is proto2, for `required`, an
+# `extensions` range and the non-STATIC allocations proto3 cannot express.
+zephyr_nanopb_sources(app src/fixture.proto src/fixture2.proto)
 
 target_sources(app PRIVATE src/main.c)
 

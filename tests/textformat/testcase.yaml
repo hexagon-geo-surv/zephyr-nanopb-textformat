@@ -23,3 +23,10 @@ tests:
   nanopb_textformat.no64:
     extra_configs:
       - CONFIG_NANOPB_WITHOUT_64BIT=y
+
+  # The Kconfig minimum: one level of submessage allowed, so the fixture's
+  # two-level chain actually hits PB_TF_ERR_DEPTH rather than merely being
+  # configured to.
+  nanopb_textformat.shallow:
+    extra_configs:
+      - CONFIG_NANOPB_TEXTFORMAT_MAX_DEPTH=1

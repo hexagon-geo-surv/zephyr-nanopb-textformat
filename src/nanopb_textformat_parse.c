@@ -25,7 +25,13 @@ struct pb_tf_parser {
 	const char *p;
 	/** Caller's status block, or NULL. */
 	pb_tf_status_t *status;
+	/** Submessages currently open, bounded by PB_TF_MAX_DEPTH. */
+	unsigned int depth;
 };
+
+/* Recursion: a submessage value is itself a field body. */
+static pb_tf_err_t pb_tf_parse_fields(struct pb_tf_parser *ps, const pb_tf_msg_t *tf, void *msg,
+				      bool braced);
 
 /** A scanned integer literal: magnitude, sign and the base it was written in. */
 struct pb_tf_num {
@@ -357,6 +363,47 @@ static pb_tf_err_t pb_tf_write_bool(struct pb_tf_parser *ps, const pb_tf_field_t
 }
 
 /**
+ * Parse a "{ ... }" submessage body into @p dest.
+ *
+ * The braces are required here even though the colon before them is optional:
+ * text format's only other Message delimiters are angle brackets, which are out
+ * of scope. @p dest is the submessage struct, so the recursion needs no offset
+ * arithmetic of its own.
+ *
+ * Note what is deliberately absent: @p dest is not cleared. A singular or
+ * optional submessage mentioned twice therefore merges, which is what text
+ * format asks for. A repeated one is cleared per element by its caller.
+ */
+static pb_tf_err_t pb_tf_parse_submsg(struct pb_tf_parser *ps, const pb_tf_field_t *row, void *dest)
+{
+	pb_tf_err_t err;
+
+	if (row->sub == NULL) {
+		/* PB_TF_DEFINE fills this in for every MESSAGE/MSG_W_CB row. */
+		return pb_tf_fail(ps, PB_TF_ERR_INTERNAL, ps->p, row->name);
+	}
+
+	/*
+	 * Check before descending, not after: each level costs a stack frame, so
+	 * the limit has to stop the call rather than report it afterwards.
+	 */
+	if (ps->depth >= (unsigned int)PB_TF_MAX_DEPTH) {
+		return pb_tf_fail(ps, PB_TF_ERR_DEPTH, ps->p, row->name);
+	}
+
+	if (*ps->p != '{') {
+		return pb_tf_fail(ps, PB_TF_ERR_SYNTAX, ps->p, row->name);
+	}
+	ps->p++;
+
+	ps->depth++;
+	err = pb_tf_parse_fields(ps, row->sub, dest, true);
+	ps->depth--;
+
+	return err;
+}
+
+/**
  * Parse one value of @p row's type into @p dest.
  *
  * @p dest is passed in rather than taken from the iterator because a repeated
@@ -419,8 +466,13 @@ static pb_tf_err_t pb_tf_parse_value(struct pb_tf_parser *ps, const pb_tf_field_
 
 	case PB_TF_VT_MESSAGE:
 	case PB_TF_VT_MSG_W_CB:
-		/* TODO(milestone 3): recurse under the depth cap. */
-		return pb_tf_fail(ps, PB_TF_ERR_UNSUPPORTED, start, row->name);
+		/*
+		 * MSG_W_CB is just MESSAGE with a pb_callback_t ahead of it in the
+		 * struct. nanopb emits that member before the has_ bit and derives
+		 * size_offset from the latter, so the callback sits strictly below
+		 * pSize and writing through pData can never disturb it.
+		 */
+		return pb_tf_parse_submsg(ps, row, dest);
 
 	default:
 		return pb_tf_fail(ps, PB_TF_ERR_INTERNAL, start, row->name);
@@ -651,6 +703,7 @@ pb_tf_err_t pb_tf_parse(const pb_tf_msg_t *tf, void *msg, const char *text, unsi
 	ps.text = text;
 	ps.p = text;
 	ps.status = status;
+	ps.depth = 0U;
 
 	if ((flags & PB_TF_NOINIT) == 0U) {
 		pb_tf_clear(tf, msg);

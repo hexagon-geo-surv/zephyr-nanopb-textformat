@@ -276,11 +276,17 @@ indirection fact 2 requires**:
 - The 21 ltype tokens are `BOOL, BYTES, DOUBLE, ENUM, UENUM, FIXED32, FIXED64, FLOAT, INT32, INT64,
   MESSAGE, MSG_W_CB, SFIXED32, SFIXED64, SINT32, SINT64, STRING, UINT32, UINT64, EXTENSION,
   FIXED_LENGTH_BYTES` — **19 NULLs**, and `EXTENSION` and `FIXED_LENGTH_BYTES` are the two easy to
-  forget (fact 14). `EXTENSION` rows get `name = NULL` so the name scan can never match them.
+  forget (fact 14). **Implemented differently than first sketched:** rather than forcing
+  `name = NULL`, an `EXTENSION` row keeps nanopb's placeholder name and `pb_tf_field_find()` skips
+  it on `vtype`. Same guarantee -- "extensions" is never addressable -- but the name stays
+  available for diagnostics, and the row macro needs no special case.
 - For non-`MESSAGE` ltypes the replacement list ignores `t`, so `structname##_##fieldname##_MSGTYPE`
   is never substituted (C99 6.10.3.1p1) — exactly how nanopb's `PB_SI_PB_LTYPE_*` work.
 - `PB_TF_GEN_EXTERN` emits `extern const pb_tf_msg_t <sub>_tf;` for message rows, nothing otherwise,
-  and is expanded **first**, so declaration order is irrelevant and self-referential messages work.
+  and is expanded **first**, so declaration order is irrelevant. (Note the limit of that claim: a
+  *self-referential* message has no finite STATIC layout, so nanopb only generates one under
+  POINTER or CALLBACK allocation -- which this library rejects anyway. The forward declarations
+  earn their keep for order independence and mutual references, not recursion.)
   Duplicate externs are legal C.
 - Names: `PB_TF_NAME_SINGULAR(fn)` is a **direct `#fn`** — routing it through a two-level stringizer
   would prescan the argument, so a field named `errno` or `stdin` would stringize to its macro
@@ -368,7 +374,8 @@ Each ends green under twister before the next starts.
    until QEMU actually boots on this machine.
 1. **Skeleton + macro machinery.** Module scaffolding and `tests/textformat/src/fixture.proto`
    covering every shape: singular/optional/repeated scalars, submessage, repeated submessage, oneof,
-   depth 3, self-reference, string/bytes/fixed-length-bytes, enum, float, an empty message, a
+   depth 3, non-STATIC allocation (POINTER and CALLBACK, standing in for the recursive message
+   that cannot be STATIC at all), string/bytes/fixed-length-bytes, enum, float, an empty message, a
    `fixed_count` field, an `extensions` range, and an `int_size: IS_8` field. Test = *it compiles*,
    plus `BUILD_ASSERT`s on the table, plus the fixture built twice — default naming and `--c-style`
    — to lock fact 3.

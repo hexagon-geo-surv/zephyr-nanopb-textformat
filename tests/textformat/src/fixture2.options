@@ -1,0 +1,8 @@
+# proto2 fixture sizing and allocation.
+fx_p2.rep_num             max_count:3
+# STATIC + submsg_callback -> MSG_W_CB, with pb_callback_t ahead of the has_ bit.
+fx_p2.cb_sub              submsg_callback:true
+
+# Non-STATIC allocation, rejected at runtime rather than at build time.
+fx_alloc.ptr_str          type:FT_POINTER
+fx_alloc.cb_str           type:FT_CALLBACK

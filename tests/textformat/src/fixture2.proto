@@ -1,0 +1,40 @@
+// proto2 fixture, for the shapes proto3 cannot express.
+//
+// Three plan facts are only reachable from here:
+//
+//   - a `required` field, whose size_offset is 0 and whose pSize is therefore
+//     NULL, exactly like a proto3 implicit-presence scalar;
+//   - an `extensions` range, which makes nanopb synthesise a
+//     CALLBACK/OPTIONAL/EXTENSION row that must neither break the build nor be
+//     addressable by the name "extensions";
+//   - MSG_W_CB, from the submsg_callback option, where a pb_callback_t is
+//     emitted ahead of the has_ bit.
+//
+// Names are prefixed fx_p2 to stay clear of the proto3 fixture in the same
+// build.
+syntax = "proto2";
+
+message fx_p2_inner {
+  optional uint32 v = 1;
+}
+
+message fx_p2 {
+  required uint32 req_num = 1;
+  optional uint32 opt_num = 2;
+  repeated uint32 rep_num = 3;
+  optional fx_p2_inner sub = 4;
+  // submsg_callback:true -> ltype MSG_W_CB rather than MESSAGE.
+  optional fx_p2_inner cb_sub = 5;
+
+  // Synthesises X(a, CALLBACK, OPTIONAL, EXTENSION, extensions, 100).
+  extensions 100 to max;
+}
+
+// POINTER and CALLBACK allocation. This library only handles STATIC, and must
+// say so at runtime rather than failing to build -- the fix for companion
+// issue #57.
+message fx_alloc {
+  optional uint32 ok_num = 1;
+  optional string ptr_str = 2;
+  optional string cb_str = 3;
+}

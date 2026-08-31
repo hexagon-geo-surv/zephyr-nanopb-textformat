@@ -16,6 +16,7 @@
  * source-relative path into the output tree, so the generated header is at
  * <build>/src/fixture.pb.h. Same include as zephlet/tests/shell_macros. */
 #include "src/fixture.pb.h"
+#include "src/fixture2.pb.h"
 
 /*
  * One PB_TF_DEFINE per message. Order is deliberately "wrong" -- fx_shapes
@@ -31,12 +32,20 @@ PB_TF_DEFINE(FX_DEEP2, fx_deep2_t);
 PB_TF_DEFINE(FX_DEEP1, fx_deep1_t);
 PB_TF_DEFINE(FX_ANON, fx_anon_t);
 
+/* proto2 shapes: required, an extensions range, MSG_W_CB, and non-STATIC. */
+PB_TF_DEFINE(FX_P2, fx_p2_t);
+PB_TF_DEFINE(FX_P2_INNER, fx_p2_inner_t);
+PB_TF_DEFINE(FX_ALLOC, fx_alloc_t);
+
 /* The tables must agree with nanopb's own field counts. */
 BUILD_ASSERT(PB_TF_FIELD_COUNT(FX_SCALARS_FIELDLIST) == 20);
 BUILD_ASSERT(PB_TF_FIELD_COUNT(FX_SHAPES_FIELDLIST) == 11);
 BUILD_ASSERT(PB_TF_FIELD_COUNT(FX_INNER_FIELDLIST) == 2);
 BUILD_ASSERT(PB_TF_FIELD_COUNT(FX_EMPTY_FIELDLIST) == 0);
 BUILD_ASSERT(PB_TF_FIELD_COUNT(FX_ANON_FIELDLIST) == 3);
+/* Six rows, because the extensions range synthesises one. */
+BUILD_ASSERT(PB_TF_FIELD_COUNT(FX_P2_FIELDLIST) == 6);
+BUILD_ASSERT(PB_TF_FIELD_COUNT(FX_ALLOC_FIELDLIST) == 3);
 
 ZTEST_SUITE(pb_tf_macro, NULL, NULL, NULL, NULL, NULL);
 
@@ -873,4 +882,315 @@ ZTEST(pb_tf_parse, test_anonymous_oneof)
 	zassert_equal(m.which_pick, FX_ANON_P_NUM_TAG);
 	/* Anonymous: the member is reached directly, with no .pick in the path. */
 	zassert_equal(m.p_num, 9);
+}
+
+/*
+ * ===========================================================================
+ * Milestone 3: submessages.
+ * ===========================================================================
+ */
+
+ZTEST_SUITE(pb_tf_submsg, NULL, NULL, NULL, NULL, NULL);
+
+/* The colon before a submessage is optional; the braces are not. */
+ZTEST(pb_tf_submsg, test_colon_is_optional_before_braces)
+{
+	static const char *const forms[] = {
+		"sing_msg { a: 7 }",
+		"sing_msg: { a: 7 }",
+		"sing_msg{a:7}",
+		"sing_msg :{ a : 7 }",
+	};
+
+	ARRAY_FOR_EACH(forms, i) {
+		fx_shapes_t m;
+		pb_tf_status_t st;
+		pb_tf_err_t err = pb_tf_parse(&fx_shapes_t_tf, &m, forms[i], 0U, &st);
+
+		zassert_equal(err, PB_TF_OK, "form %zu (%s): %s", i, forms[i],
+			      pb_tf_strerror(st.code));
+		zassert_true(m.has_sing_msg, "form %zu", i);
+		zassert_equal(m.sing_msg.a, 7, "form %zu", i);
+	}
+}
+
+/* A scalar where a submessage belongs must not be silently accepted. */
+ZTEST(pb_tf_submsg, test_submessage_requires_braces)
+{
+	fx_shapes_t m;
+	pb_tf_status_t st;
+
+	zassert_equal(pb_tf_parse(&fx_shapes_t_tf, &m, "sing_msg: 5", 0U, &st), PB_TF_ERR_SYNTAX);
+	zassert_str_equal(st.field, "sing_msg");
+}
+
+ZTEST(pb_tf_submsg, test_nested_two_levels)
+{
+	fx_deep1_t m;
+	pb_tf_status_t st;
+	pb_tf_err_t err = pb_tf_parse(&fx_deep1_t_tf, &m, "d2 { d3 { v: 5 } }", 0U, &st);
+
+	if (CONFIG_NANOPB_TEXTFORMAT_MAX_DEPTH >= 2) {
+		zassert_equal(err, PB_TF_OK, "%s", pb_tf_strerror(st.code));
+		zassert_equal(m.d2.d3.v, 5);
+	} else {
+		zassert_equal(err, PB_TF_ERR_DEPTH, "got %s", pb_tf_strerror(err));
+	}
+}
+
+/* Each level costs a stack frame, so the cap must stop the call. */
+ZTEST(pb_tf_submsg, test_depth_cap)
+{
+	fx_deep1_t m;
+	pb_tf_status_t st;
+
+	/* One level always fits: the Kconfig range starts at 1. */
+	pb_tf_err_t err = pb_tf_parse(&fx_deep1_t_tf, &m, "d2 { }", 0U, &st);
+
+	zassert_equal(err, PB_TF_OK, "%s", pb_tf_strerror(st.code));
+
+	if (CONFIG_NANOPB_TEXTFORMAT_MAX_DEPTH == 1) {
+		zassert_equal(pb_tf_parse(&fx_deep1_t_tf, &m, "d2 { d3 { v: 1 } }", 0U, &st),
+			      PB_TF_ERR_DEPTH);
+		zassert_str_equal(st.field, "d3", "the field that could not be entered");
+	}
+}
+
+ZTEST(pb_tf_submsg, test_repeated_submessage_list)
+{
+	fx_shapes_t m;
+	pb_tf_status_t st;
+	pb_tf_err_t err =
+		pb_tf_parse(&fx_shapes_t_tf, &m, "rep_msg: [{a: 1}, {a: 2, b: -3}]", 0U, &st);
+
+	zassert_equal(err, PB_TF_OK, "%s", pb_tf_strerror(st.code));
+	zassert_equal(m.rep_msg_count, 2, "got %u", m.rep_msg_count);
+	zassert_equal(m.rep_msg[0].a, 1);
+	zassert_equal(m.rep_msg[1].a, 2);
+	zassert_equal(m.rep_msg[1].b, -3);
+}
+
+ZTEST(pb_tf_submsg, test_repeated_submessage_by_repetition)
+{
+	fx_shapes_t m;
+	pb_tf_status_t st;
+	pb_tf_err_t err =
+		pb_tf_parse(&fx_shapes_t_tf, &m, "rep_msg { a: 1 } rep_msg { a: 2 }", 0U, &st);
+
+	zassert_equal(err, PB_TF_OK, "%s", pb_tf_strerror(st.code));
+	zassert_equal(m.rep_msg_count, 2, "got %u", m.rep_msg_count);
+	zassert_equal(m.rep_msg[0].a, 1);
+	zassert_equal(m.rep_msg[1].a, 2);
+}
+
+/*
+ * An appended element must not inherit the previous occupant's bytes. Fill the
+ * array first, then reparse into it with NOINIT after resetting only the count.
+ */
+ZTEST(pb_tf_submsg, test_appended_element_is_cleared)
+{
+	fx_shapes_t m;
+
+	zassert_equal(pb_tf_parse(&fx_shapes_t_tf, &m, "rep_msg: [{a: 1, b: 2}]", 0U, NULL),
+		      PB_TF_OK);
+	zassert_equal(m.rep_msg[0].b, 2);
+
+	/* Slot 0 still holds b == 2; writing it again must start from zero. */
+	m.rep_msg_count = 0;
+	zassert_equal(pb_tf_parse(&fx_shapes_t_tf, &m, "rep_msg: [{a: 9}]", PB_TF_NOINIT, NULL),
+		      PB_TF_OK);
+	zassert_equal(m.rep_msg[0].a, 9);
+	zassert_equal(m.rep_msg[0].b, 0, "a fresh element must not inherit ghost bytes");
+}
+
+/* A singular or optional submessage mentioned twice merges, per text format. */
+ZTEST(pb_tf_submsg, test_singular_submessage_merges)
+{
+	fx_shapes_t m;
+	pb_tf_status_t st;
+	pb_tf_err_t err =
+		pb_tf_parse(&fx_shapes_t_tf, &m, "sing_msg { a: 1 } sing_msg { b: 2 }", 0U, &st);
+
+	zassert_equal(err, PB_TF_OK, "%s", pb_tf_strerror(st.code));
+	zassert_equal(m.sing_msg.a, 1, "the first mention must survive the second");
+	zassert_equal(m.sing_msg.b, 2);
+}
+
+ZTEST(pb_tf_submsg, test_oneof_message_member)
+{
+	fx_shapes_t m;
+	pb_tf_status_t st;
+	pb_tf_err_t err = pb_tf_parse(&fx_shapes_t_tf, &m, "c_msg { a: 4 }", 0U, &st);
+
+	zassert_equal(err, PB_TF_OK, "%s", pb_tf_strerror(st.code));
+	zassert_equal(m.which_choice, FX_SHAPES_C_MSG_TAG);
+	zassert_equal(m.choice.c_msg.a, 4);
+}
+
+/*
+ * Switching oneof members must clear the union first. c_num and c_msg overlap,
+ * so without the clear the message member would start from the integer's bytes.
+ */
+ZTEST(pb_tf_submsg, test_oneof_switch_clears_union)
+{
+	fx_shapes_t m;
+	pb_tf_status_t st;
+	pb_tf_err_t err;
+
+	/* Set every byte of the union, then switch to the message member. */
+	err = pb_tf_parse(&fx_shapes_t_tf, &m, "c_num: 4294967295", 0U, &st);
+	zassert_equal(err, PB_TF_OK, "%s", pb_tf_strerror(st.code));
+
+	err = pb_tf_parse(&fx_shapes_t_tf, &m, "c_num: 4294967295 c_msg { a: 1 }", 0U, &st);
+	zassert_equal(err, PB_TF_OK, "%s", pb_tf_strerror(st.code));
+	zassert_equal(m.which_choice, FX_SHAPES_C_MSG_TAG);
+	zassert_equal(m.choice.c_msg.a, 1);
+	zassert_equal(m.choice.c_msg.b, 0, "switching members must clear the union");
+
+	/* And the other way round. */
+	err = pb_tf_parse(&fx_shapes_t_tf, &m, "c_msg { a: 7, b: 7 } c_num: 3", 0U, &st);
+	zassert_equal(err, PB_TF_OK, "%s", pb_tf_strerror(st.code));
+	zassert_equal(m.which_choice, FX_SHAPES_C_NUM_TAG);
+	zassert_equal(m.choice.c_num, 3);
+}
+
+ZTEST(pb_tf_submsg, test_anonymous_oneof_message_member)
+{
+	fx_anon_t m;
+	pb_tf_status_t st;
+	pb_tf_err_t err = pb_tf_parse(&fx_anon_t_tf, &m, "keep: 1 p_msg { a: 2 }", 0U, &st);
+
+	zassert_equal(err, PB_TF_OK, "%s", pb_tf_strerror(st.code));
+	zassert_equal(m.keep, 1);
+	zassert_equal(m.which_pick, FX_ANON_P_MSG_TAG);
+	zassert_equal(m.p_msg.a, 2);
+}
+
+ZTEST(pb_tf_submsg, test_errors_inside_a_submessage)
+{
+	fx_shapes_t m;
+	pb_tf_status_t st;
+	const char *txt = "sing_msg { nosuch: 1 }";
+
+	zassert_equal(pb_tf_parse(&fx_shapes_t_tf, &m, txt, 0U, &st), PB_TF_ERR_UNKNOWN_FIELD);
+	zassert_equal(st.offset, off_of(txt, "nosuch"), "offset must be inside the submessage");
+
+	zassert_equal(pb_tf_parse(&fx_shapes_t_tf, &m, "sing_msg { a: 1", 0U, &st),
+		      PB_TF_ERR_SYNTAX, "unterminated submessage");
+
+	zassert_equal(pb_tf_parse(&fx_shapes_t_tf, &m, "sing_msg { a: -1 }", 0U, &st),
+		      PB_TF_ERR_RANGE);
+	zassert_str_equal(st.field, "a", "the innermost field is the one at fault");
+}
+
+/*
+ * ===========================================================================
+ * proto2-only shapes.
+ * ===========================================================================
+ */
+
+/* A required field has size_offset 0, so pSize is NULL just like SINGULAR. */
+ZTEST(pb_tf_submsg, test_proto2_required)
+{
+	fx_p2_t m;
+	pb_tf_status_t st;
+	pb_field_iter_t it;
+	const pb_tf_field_t *f = pb_tf_field_find(&fx_p2_t_tf, "req_num", 7);
+	pb_tf_err_t err;
+
+	zassert_not_null(f);
+	zassert_equal(PB_TF_HT(f->rules), PB_TF_HT_REQUIRED, "got 0x%02x", f->rules);
+
+	zassert_true(pb_field_iter_begin(&it, &fx_p2_t_msg, &m));
+	zassert_true(pb_field_iter_find(&it, FX_P2_REQ_NUM_TAG));
+	zassert_is_null(it.pSize, "a required field has no presence member to write");
+
+	err = pb_tf_parse(&fx_p2_t_tf, &m, "req_num: 11 opt_num: 12 rep_num: [1,2]", 0U, &st);
+	zassert_equal(err, PB_TF_OK, "%s", pb_tf_strerror(st.code));
+	zassert_equal(m.req_num, 11);
+	zassert_true(m.has_opt_num);
+	zassert_equal(m.rep_num_count, 2);
+}
+
+/* Presence of proto2 `required` is documented as not enforced. */
+ZTEST(pb_tf_submsg, test_proto2_required_is_not_enforced)
+{
+	fx_p2_t m;
+
+	zassert_equal(pb_tf_parse(&fx_p2_t_tf, &m, "opt_num: 1", 0U, NULL), PB_TF_OK,
+		      "a missing required field is the caller's business, not ours");
+	zassert_equal(m.req_num, 0);
+}
+
+/*
+ * MSG_W_CB is MESSAGE plus a pb_callback_t, which nanopb emits ahead of the
+ * has_ bit. size_offset derives from has_, so the callback sits strictly below
+ * pSize and writing through pData must leave it alone.
+ */
+ZTEST(pb_tf_submsg, test_msg_w_cb_leaves_the_callback_alone)
+{
+	fx_p2_t m;
+	pb_tf_status_t st;
+	const pb_tf_field_t *f = pb_tf_field_find(&fx_p2_t_tf, "cb_sub", 6);
+	pb_tf_err_t err;
+
+	zassert_not_null(f);
+	zassert_equal(f->vtype, PB_TF_VT_MSG_W_CB, "got vtype %u", f->vtype);
+	zassert_equal_ptr(f->sub, &fx_p2_inner_t_tf, "MSG_W_CB must resolve its descriptor");
+
+	(void)memset(&m, 0, sizeof(m));
+	m.cb_cb_sub.arg = (void *)&fx_p2_t_tf;
+
+	err = pb_tf_parse(&fx_p2_t_tf, &m, "cb_sub { v: 3 }", PB_TF_NOINIT, &st);
+	zassert_equal(err, PB_TF_OK, "%s", pb_tf_strerror(st.code));
+	zassert_equal(m.cb_sub.v, 3);
+	zassert_true(m.has_cb_sub);
+	zassert_equal_ptr(m.cb_cb_sub.arg, &fx_p2_t_tf, "the callback must be untouched");
+}
+
+/*
+ * An extensions range synthesises a row. It must not break the build, and must
+ * not be addressable -- "extensions" is nanopb's own placeholder name, not a
+ * field the user wrote.
+ */
+ZTEST(pb_tf_submsg, test_extension_row_is_not_addressable)
+{
+	fx_p2_t m;
+	pb_tf_status_t st;
+	bool seen = false;
+
+	/* The row exists in the table... */
+	for (uint16_t i = 0U; i < fx_p2_t_tf.count; i++) {
+		if (fx_p2_t_tf.fields[i].vtype == PB_TF_VT_EXTENSION) {
+			seen = true;
+			zassert_equal(fx_p2_t_tf.fields[i].tag, 100, "the range start");
+		}
+	}
+	zassert_true(seen, "the extensions range must produce a row");
+
+	/* ...but the name scan skips it. */
+	zassert_is_null(pb_tf_field_find(&fx_p2_t_tf, "extensions", 10));
+	zassert_equal(pb_tf_parse(&fx_p2_t_tf, &m, "extensions: 1", 0U, &st),
+		      PB_TF_ERR_UNKNOWN_FIELD);
+}
+
+/* POINTER and CALLBACK allocation: a runtime error, not a build break. */
+ZTEST(pb_tf_submsg, test_non_static_allocation_is_unsupported)
+{
+	fx_alloc_t m;
+	pb_tf_status_t st;
+
+	/* The STATIC field in the same message still works. */
+	pb_tf_err_t err = pb_tf_parse(&fx_alloc_t_tf, &m, "ok_num: 5", 0U, &st);
+
+	zassert_equal(err, PB_TF_OK, "%s", pb_tf_strerror(st.code));
+	zassert_equal(m.ok_num, 5);
+
+	zassert_equal(pb_tf_parse(&fx_alloc_t_tf, &m, "ptr_str: \"x\"", 0U, &st),
+		      PB_TF_ERR_UNSUPPORTED);
+	zassert_str_equal(st.field, "ptr_str");
+
+	zassert_equal(pb_tf_parse(&fx_alloc_t_tf, &m, "cb_str: \"x\"", 0U, &st),
+		      PB_TF_ERR_UNSUPPORTED);
+	zassert_str_equal(st.field, "cb_str");
 }
