@@ -1,0 +1,31 @@
+// The same shapes once more, generated with nanopb's DEFAULT naming rather than
+// --c-style.
+//
+// This is what verifies that PB_TF_DEFINE is naming-agnostic. The macro keys the
+// descriptor it emits off `structname`, and takes `msgname` separately, exactly
+// as PB_BIND(msgname, structname, width) does -- so under --c-style the two
+// differ (FX_SHAPES vs fx_shapes_t) and here they coincide (FxDef, FxDef).
+// Without this fixture that claim would rest on reading the generator rather
+// than on a build.
+//
+// Message names are CamelCase because that is what the default style is for;
+// field names stay lower_snake_case, which this library requires either way.
+syntax = "proto3";
+
+message FxDefInner {
+  uint32 a = 1;
+  int32 b = 2;
+}
+
+message FxDef {
+  uint32 plain = 1;
+  optional uint32 opt = 2;
+  repeated uint32 rep = 3;
+  FxDefInner sub = 4;
+  string text = 5;
+
+  oneof pick {
+    uint32 p_num = 6;
+    FxDefInner p_msg = 7;
+  }
+}

@@ -78,7 +78,16 @@ no re-verification during milestone 0.
    to `##`, so C99 6.10.3.3p2 suppresses argument expansion and it emits
    `&(Msg_inner_MSGTYPE_tf)`. nanopb splits this across two macros for exactly this reason
    (`pb.h:746-747` → `pb.h:757`). Every `_MSGTYPE`-consuming macro needs that second level.
-3. zephlet generates nanopb with **`--c-style`** (`tests/shell_macros/CMakeLists.txt:20`): FIELDLIST
+3. **Verified by build in milestone 7, not just by reading.** The milestone-1 plan called for the
+   fixture to be generated twice — default naming and `--c-style` — and that never happened; the
+   test app used `--c-style` only, so this fact rested on reading the generator. Writing the README
+   surfaced it (the claim "generated twice" was false), and `tests/textformat/src/fixture3.proto` now
+   closes it: default naming emits `FxDef_FIELDLIST` and `FxDef_sub_MSGTYPE`, so
+   `PB_TF_DEFINE(FxDef, FxDef)` resolves from the same macro that handles
+   `PB_TF_DEFINE(FX_SHAPES, fx_shapes_t)`. `NANOPB_OPTIONS` is read per
+   `zephyr_nanopb_sources()` call, which is what makes two styles in one build possible.
+
+   zephlet generates nanopb with **`--c-style`** (`tests/shell_macros/CMakeLists.txt:20`): FIELDLIST
    is `TICK_CONFIG_FIELDLIST`, struct is `tick_config_t`, descriptor is `tick_config_t_msg`. So the
    macro mirrors `PB_BIND(msgname, structname, width)`'s two-token form; keying the generated symbol
    off `structname` makes it naming-style-agnostic.
@@ -102,7 +111,13 @@ no re-verification during milestone 0.
    generated `.pb.c`. The X-macro `#fieldname` stringification is the only source. Under
    `--c-style`, `var_name()` runs `underscore()` (`nanopb_generator.py:171-188`), which is identity
    for `lower_snake_case` protos; a `camelCase` field would only be accepted mangled. Documented.
-9. **Shell input.** `CONFIG_SHELL_ARGC_MAX` defaults to 20 and `shell.c:677-679` **silently drops**
+9. **Shell input.** *(Line numbers re-verified in milestone 7 before going into user-facing docs;
+   three had drifted. The argc drop is `shell.c:275-280`, `active_cmd_prepare()` is
+   `shell.c:588-591`, the raw handoff is `shell.c:804-806`, and quote/backslash stripping is
+   `shell_utils.c:112-134`. One finding came out stronger than written: `CONFIG_SHELL_WILDCARD` is
+   `default y if !SHELL_MINIMAL`, so the wildcard hazard is the **default state**, not an opt-in.)*
+
+   `CONFIG_SHELL_ARGC_MAX` defaults to 20 and the shell **silently drops**
    everything past the cap (~8 text-format fields), and `make_argv` collapses whitespace runs — so
    joining `argv` silently corrupts both long messages and string values.
    `SHELL_OPT_ARG_RAW` on a leaf command makes `active_cmd_prepare` (`shell.c:585-590`) stop
@@ -574,3 +589,30 @@ re-registering the RPC commands as `SHELL_OPT_ARG_RAW` leaves, emitting one `PB_
 request/response message from `generate_zephlet.py`, adding this repo to
 `ports_adapters_zbus/west.yml`, and retiring the "nothing walks a message's fields at runtime" claim
 in `zephlet_shell_macros.h:4-8` and ADR-0001.
+
+---
+
+## Status
+
+All seven milestones are complete. Verified on Zephyr v4.4.0 with nanopb `5499fd4c`:
+
+```
+west twister -T tests -p mps2/an385 -p qemu_x86
+8/8 configurations, 878/878 test cases, no warnings
+```
+
+Two design decisions were revised during implementation, both recorded above with their
+measurements: **no recursion** in either direction (parser rewritten, printer built that way), and
+**no lockstep iteration** in the printer. Both traded a micro-optimisation for bounded, visible RAM.
+
+Corrections made to this document while implementing, each verified against the pinned trees:
+`cmsis` → `cmsis_6` (fact 16); `PB_WITHOUT_64BIT` does not narrow storage (fact 12); `EXTENSION` rows
+keep their name and are skipped on vtype; forward declarations do not make self-referential messages
+work, since those have no STATIC layout; fact 3 verified by a second naming style rather than by
+reading; fact 9's line numbers re-verified and its wildcard caveat strengthened.
+
+One API addition beyond the plan: `pb_tf_print_buf()`, because `pb_tf_out_buf()` cannot terminate a
+buffer for a message that prints nothing.
+
+What remains is the follow-up on zephlet#58, listed below and deliberately out of scope for this
+repository.

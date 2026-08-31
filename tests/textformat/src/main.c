@@ -22,6 +22,7 @@
  * <build>/src/fixture.pb.h. Same include as zephlet/tests/shell_macros. */
 #include "src/fixture.pb.h"
 #include "src/fixture2.pb.h"
+#include "src/fixture3.pb.h"
 
 /*
  * One PB_TF_DEFINE per message. Order is deliberately "wrong" -- fx_shapes
@@ -42,6 +43,15 @@ PB_TF_DEFINE(FX_P2, fx_p2_t);
 PB_TF_DEFINE(FX_P2_INNER, fx_p2_inner_t);
 PB_TF_DEFINE(FX_ALLOC, fx_alloc_t);
 
+/*
+ * Default nanopb naming. Note both arguments are the same token here, whereas
+ * every definition above passes a different pair -- that is exactly the
+ * difference PB_TF_DEFINE has to absorb, and it absorbs it by keying the
+ * descriptor off structname and taking msgname separately, as PB_BIND does.
+ */
+PB_TF_DEFINE(FxDef, FxDef);
+PB_TF_DEFINE(FxDefInner, FxDefInner);
+
 /* The tables must agree with nanopb's own field counts. */
 BUILD_ASSERT(PB_TF_FIELD_COUNT(FX_SCALARS_FIELDLIST) == 20);
 BUILD_ASSERT(PB_TF_FIELD_COUNT(FX_SHAPES_FIELDLIST) == 11);
@@ -51,6 +61,7 @@ BUILD_ASSERT(PB_TF_FIELD_COUNT(FX_ANON_FIELDLIST) == 3);
 /* Six rows, because the extensions range synthesises one. */
 BUILD_ASSERT(PB_TF_FIELD_COUNT(FX_P2_FIELDLIST) == 6);
 BUILD_ASSERT(PB_TF_FIELD_COUNT(FX_ALLOC_FIELDLIST) == 3);
+BUILD_ASSERT(PB_TF_FIELD_COUNT(FxDef_FIELDLIST) == 7);
 
 ZTEST_SUITE(pb_tf_macro, NULL, NULL, NULL, NULL, NULL);
 
@@ -2194,3 +2205,66 @@ ZTEST(pb_tf_float, test_degrades_cleanly)
 }
 
 #endif /* CONFIG_NANOPB_TEXTFORMAT_FLOAT */
+
+/*
+ * ===========================================================================
+ * Naming styles: the same shapes under nanopb's default naming.
+ * ===========================================================================
+ */
+
+/*
+ * Under --c-style the FIELDLIST prefix and the struct type differ; under the
+ * default naming they are one token. That this compiles at all is the substance
+ * of the test -- the descriptor, its forward declarations and its submessage
+ * _MSGTYPE lookups all have to resolve from the same pair of macro arguments.
+ */
+ZTEST(pb_tf_macro, test_default_naming_style)
+{
+	const pb_tf_field_t *f;
+
+	zassert_equal_ptr(FxDef_tf.desc, &FxDef_msg);
+	zassert_equal(FxDef_tf.count, 7, "got %u", FxDef_tf.count);
+	zassert_equal(FxDef_tf.struct_size, sizeof(FxDef));
+
+	/* Field names are unaffected by the naming style. */
+	f = pb_tf_field_find(&FxDef_tf, "plain", 5);
+	zassert_not_null(f);
+	zassert_equal(f->tag, FxDef_plain_tag);
+
+	/* The submessage descriptor resolved through <struct>_<field>_MSGTYPE. */
+	f = pb_tf_field_find(&FxDef_tf, "sub", 3);
+	zassert_not_null(f);
+	zassert_equal_ptr(f->sub, &FxDefInner_tf, "submessage lookup must be naming-agnostic");
+
+	/* Including for a oneof member, whose symbol adds the union name. */
+	f = pb_tf_field_find(&FxDef_tf, "p_msg", 5);
+	zassert_not_null(f);
+	zassert_equal_ptr(f->sub, &FxDefInner_tf);
+}
+
+ZTEST(pb_tf_parse, test_default_naming_style_parses)
+{
+	FxDef m;
+	pb_tf_status_t st;
+	pb_tf_err_t err = pb_tf_parse(&FxDef_tf, &m,
+				      "plain: 1 opt: 2 rep: [3, 4] sub { a: 5 } text: \"hi\"", 0U,
+				      &st);
+
+	zassert_equal(err, PB_TF_OK, "%s", pb_tf_strerror(st.code));
+	zassert_equal(m.plain, 1);
+	zassert_true(m.has_opt);
+	zassert_equal(m.rep_count, 2);
+	zassert_equal(m.sub.a, 5);
+	zassert_str_equal(m.text, "hi");
+}
+
+ZTEST(pb_tf_roundtrip, test_default_naming_style)
+{
+	FxDef a;
+	FxDef b;
+
+	roundtrip(&FxDef_tf, &a, &b, sizeof(a), "plain: 1 opt: 2 rep: [3] sub { a: 4, b: -5 } "
+					        "text: \"x\" p_num: 6",
+		  PB_TF_COMPACT);
+	roundtrip(&FxDef_tf, &a, &b, sizeof(a), "plain: 9 p_msg { a: 1 }", PB_TF_MULTILINE);
+}

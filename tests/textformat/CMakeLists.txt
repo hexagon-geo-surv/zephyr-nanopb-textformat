@@ -21,6 +21,13 @@ set(NANOPB_OPTIONS "--c-style")
 # `extensions` range and the non-STATIC allocations proto3 cannot express.
 zephyr_nanopb_sources(app src/fixture.proto src/fixture2.proto)
 
+# fixture3.proto is generated with nanopb's DEFAULT naming, which is what proves
+# PB_TF_DEFINE works for both styles: under --c-style its two arguments differ
+# (FX_SHAPES vs fx_shapes_t), here they coincide (FxDef, FxDef). NANOPB_OPTIONS
+# is read per call, so clearing it applies only to this one.
+set(NANOPB_OPTIONS "")
+zephyr_nanopb_sources(app src/fixture3.proto)
+
 target_sources(app PRIVATE src/main.c)
 
 # White-box suite: the macro tests assert on the generated row table through the
