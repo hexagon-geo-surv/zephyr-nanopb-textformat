@@ -421,6 +421,349 @@ static pb_tf_err_t pb_tf_write_bool(struct pb_tf_parser *ps, const pb_tf_field_t
 }
 
 
+/*
+ * ---------------------------------------------------------------------------
+ * Strings and bytes
+ *
+ * Unescaped straight into the destination field: there is no scratch buffer, so
+ * a value that will not fit is refused at the byte that overflows rather than
+ * after building it somewhere else first.
+ * ---------------------------------------------------------------------------
+ */
+
+/** Where decoded bytes go, and how many the field can hold. */
+struct pb_tf_sink {
+	pb_byte_t *buf;
+	size_t cap;
+	size_t len;
+};
+
+static pb_tf_err_t pb_tf_sink_put(struct pb_tf_parser *ps, const pb_tf_field_t *row,
+				  struct pb_tf_sink *sk, pb_byte_t b, const char *at)
+{
+	if (sk->len >= sk->cap) {
+		return pb_tf_fail(ps, PB_TF_ERR_NO_SPACE, at, row->name);
+	}
+
+	sk->buf[sk->len] = b;
+	sk->len++;
+
+	return PB_TF_OK;
+}
+
+/**
+ * Append a code point as UTF-8.
+ *
+ * \uXXXX tops out at U+FFFF, so three bytes is the most this can produce.
+ * Surrogates are rejected by the caller, which keeps this from ever emitting
+ * ill-formed UTF-8 -- and keeps a CONFIG_NANOPB_VALIDATE_UTF8 build from later
+ * rejecting a struct this parser filled.
+ */
+static pb_tf_err_t pb_tf_put_utf8(struct pb_tf_parser *ps, const pb_tf_field_t *row,
+				  struct pb_tf_sink *sk, uint32_t cp, const char *at)
+{
+	pb_tf_err_t err;
+
+	if (cp < 0x80U) {
+		return pb_tf_sink_put(ps, row, sk, (pb_byte_t)cp, at);
+	}
+
+	if (cp < 0x800U) {
+		err = pb_tf_sink_put(ps, row, sk, (pb_byte_t)(0xC0U | (cp >> 6)), at);
+		if (err != PB_TF_OK) {
+			return err;
+		}
+		return pb_tf_sink_put(ps, row, sk, (pb_byte_t)(0x80U | (cp & 0x3FU)), at);
+	}
+
+	err = pb_tf_sink_put(ps, row, sk, (pb_byte_t)(0xE0U | (cp >> 12)), at);
+	if (err != PB_TF_OK) {
+		return err;
+	}
+	err = pb_tf_sink_put(ps, row, sk, (pb_byte_t)(0x80U | ((cp >> 6) & 0x3FU)), at);
+	if (err != PB_TF_OK) {
+		return err;
+	}
+
+	return pb_tf_sink_put(ps, row, sk, (pb_byte_t)(0x80U | (cp & 0x3FU)), at);
+}
+
+/**
+ * Decode one escape sequence, the backslash already consumed.
+ *
+ * Handles \a \b \f \n \r \t \v \? \\ \' \" plus \xH[H], \NNN octal and
+ * \uXXXX. Anything else -- including \U, which is out of scope -- is a syntax
+ * error rather than a silently dropped backslash.
+ */
+static pb_tf_err_t pb_tf_scan_escape(struct pb_tf_parser *ps, const pb_tf_field_t *row,
+				     struct pb_tf_sink *sk)
+{
+	const char *at = ps->p - 1;
+	pb_byte_t b;
+	uint8_t d;
+
+	switch (*ps->p) {
+	case 'a':
+		b = (pb_byte_t)'\a';
+		ps->p++;
+		break;
+	case 'b':
+		b = (pb_byte_t)'\b';
+		ps->p++;
+		break;
+	case 'f':
+		b = (pb_byte_t)'\f';
+		ps->p++;
+		break;
+	case 'n':
+		b = (pb_byte_t)'\n';
+		ps->p++;
+		break;
+	case 'r':
+		b = (pb_byte_t)'\r';
+		ps->p++;
+		break;
+	case 't':
+		b = (pb_byte_t)'\t';
+		ps->p++;
+		break;
+	case 'v':
+		b = (pb_byte_t)'\v';
+		ps->p++;
+		break;
+	case '?':
+	case '\\':
+	case '\'':
+	case '"':
+		b = (pb_byte_t)*ps->p;
+		ps->p++;
+		break;
+
+	case 'x':
+	case 'X': {
+		/* One or two hex digits, per the spec's HEX_ESCAPE. */
+		uint8_t v;
+
+		ps->p++;
+		if (char2hex(*ps->p, &d) != 0) {
+			return pb_tf_fail(ps, PB_TF_ERR_SYNTAX, at, row->name);
+		}
+		v = d;
+		ps->p++;
+
+		if (char2hex(*ps->p, &d) == 0) {
+			v = (uint8_t)((v << 4) | d);
+			ps->p++;
+		}
+
+		b = (pb_byte_t)v;
+		break;
+	}
+
+	case 'u': {
+		uint32_t cp = 0U;
+		unsigned int i;
+
+		ps->p++;
+		for (i = 0U; i < 4U; i++) {
+			if (char2hex(*ps->p, &d) != 0) {
+				return pb_tf_fail(ps, PB_TF_ERR_SYNTAX, at, row->name);
+			}
+			cp = (cp << 4) | (uint32_t)d;
+			ps->p++;
+		}
+
+		/*
+		 * A lone surrogate is rejected rather than encoded. Surrogate
+		 * pairs are out of scope, so there is no way to reach a code
+		 * point above U+FFFF and nothing here can produce ill-formed
+		 * UTF-8.
+		 */
+		if ((cp >= 0xD800U) && (cp <= 0xDFFFU)) {
+			return pb_tf_fail(ps, PB_TF_ERR_SYNTAX, at, row->name);
+		}
+
+		return pb_tf_put_utf8(ps, row, sk, cp, at);
+	}
+
+	default:
+		if ((*ps->p >= '0') && (*ps->p <= '7')) {
+			/* One to three octal digits. */
+			unsigned int v = 0U;
+			unsigned int i;
+
+			for (i = 0U; (i < 3U) && (*ps->p >= '0') && (*ps->p <= '7'); i++) {
+				v = (v * 8U) + (unsigned int)(*ps->p - '0');
+				ps->p++;
+			}
+
+			if (v > 0xFFU) {
+				return pb_tf_fail(ps, PB_TF_ERR_RANGE, at, row->name);
+			}
+
+			b = (pb_byte_t)v;
+			break;
+		}
+
+		return pb_tf_fail(ps, PB_TF_ERR_SYNTAX, at, row->name);
+	}
+
+	return pb_tf_sink_put(ps, row, sk, b, at);
+}
+
+/**
+ * Scan a quoted literal into @p sk.
+ *
+ * Either quote character opens a literal and the matching one closes it, so the
+ * other appears inside as an ordinary byte.
+ *
+ * Every raw byte below 0x20 is refused. protoc certainly rejects an unescaped
+ * newline; for the others -- a literal tab, say -- this is deliberately stricter
+ * than protoc. Narrowing is always safe for a subset dialect, and it costs
+ * nothing real here: the printer escapes control characters, so round-trip is
+ * unaffected, and shell input never carries a raw tab past line editing.
+ *
+ * Adjacent string concatenation ("a" "b") is out of scope and needs no check
+ * here -- the second literal simply is not a field name, so the field loop
+ * reports it.
+ */
+static pb_tf_err_t pb_tf_scan_quoted(struct pb_tf_parser *ps, const pb_tf_field_t *row,
+				     struct pb_tf_sink *sk)
+{
+	const char *start = ps->p;
+	char quote;
+
+	if ((*ps->p != '"') && (*ps->p != '\'')) {
+		return pb_tf_fail(ps, PB_TF_ERR_TYPE, start, row->name);
+	}
+
+	quote = *ps->p;
+	ps->p++;
+
+	while (*ps->p != quote) {
+		unsigned char c = (unsigned char)*ps->p;
+		pb_tf_err_t err;
+
+		if (c == 0U) {
+			/* Unterminated literal. */
+			return pb_tf_fail(ps, PB_TF_ERR_SYNTAX, ps->p, row->name);
+		}
+
+		if (c < 0x20U) {
+			return pb_tf_fail(ps, PB_TF_ERR_SYNTAX, ps->p, row->name);
+		}
+
+		if (c == (unsigned char)'\\') {
+			ps->p++;
+			err = pb_tf_scan_escape(ps, row, sk);
+		} else {
+			err = pb_tf_sink_put(ps, row, sk, (pb_byte_t)c, ps->p);
+			ps->p++;
+		}
+
+		if (err != PB_TF_OK) {
+			return err;
+		}
+	}
+
+	ps->p++;
+
+	return PB_TF_OK;
+}
+
+/** A char array. nanopb's bound is size + 1 <= data_size, NUL always written. */
+static pb_tf_err_t pb_tf_write_string(struct pb_tf_parser *ps, const pb_tf_field_t *row,
+				      pb_size_t data_size, void *dest)
+{
+	struct pb_tf_sink sk;
+	pb_tf_err_t err;
+
+	if (data_size < 1U) {
+		return pb_tf_fail(ps, PB_TF_ERR_INTERNAL, ps->p, row->name);
+	}
+
+	sk.buf = dest;
+	sk.cap = (size_t)data_size - 1U;
+	sk.len = 0U;
+
+	err = pb_tf_scan_quoted(ps, row, &sk);
+	if (err != PB_TF_OK) {
+		return err;
+	}
+
+	sk.buf[sk.len] = 0U;
+
+	return PB_TF_OK;
+}
+
+/**
+ * A pb_bytes_array_t: a pb_size_t count followed by the payload.
+ *
+ * The capacity is data_size minus the header, exactly as nanopb computes it.
+ * Note that this can exceed the .options max_size by whatever tail padding the
+ * struct carries -- true of nanopb itself, so it is not advertised as exact.
+ */
+static pb_tf_err_t pb_tf_write_bytes(struct pb_tf_parser *ps, const pb_tf_field_t *row,
+				     pb_size_t data_size, void *dest)
+{
+	pb_bytes_array_t *arr = dest;
+	struct pb_tf_sink sk;
+	pb_tf_err_t err;
+
+	if ((size_t)data_size <= offsetof(pb_bytes_array_t, bytes)) {
+		return pb_tf_fail(ps, PB_TF_ERR_INTERNAL, ps->p, row->name);
+	}
+
+	sk.buf = arr->bytes;
+	sk.cap = (size_t)data_size - offsetof(pb_bytes_array_t, bytes);
+	sk.len = 0U;
+
+	err = pb_tf_scan_quoted(ps, row, &sk);
+	if (err != PB_TF_OK) {
+		return err;
+	}
+
+	arr->size = (pb_size_t)sk.len;
+
+	return PB_TF_OK;
+}
+
+/**
+ * A fixed_length_bytes field: a bare array with no count.
+ *
+ * nanopb accepts either exactly data_size bytes or an empty value, which it
+ * treats as all zeros (pb_decode.c:1684-1692). Anything in between is refused
+ * as PB_TF_ERR_TYPE -- the literal is the wrong shape for the field, and
+ * PB_TF_ERR_NO_SPACE would claim it was too long when it is too short.
+ */
+static pb_tf_err_t pb_tf_write_fixed_bytes(struct pb_tf_parser *ps, const pb_tf_field_t *row,
+					   pb_size_t data_size, void *dest)
+{
+	const char *start = ps->p;
+	struct pb_tf_sink sk;
+	pb_tf_err_t err;
+
+	sk.buf = dest;
+	sk.cap = (size_t)data_size;
+	sk.len = 0U;
+
+	err = pb_tf_scan_quoted(ps, row, &sk);
+	if (err != PB_TF_OK) {
+		return err;
+	}
+
+	if (sk.len == 0U) {
+		(void)memset(dest, 0, data_size);
+		return PB_TF_OK;
+	}
+
+	if (sk.len != (size_t)data_size) {
+		return pb_tf_fail(ps, PB_TF_ERR_TYPE, start, row->name);
+	}
+
+	return PB_TF_OK;
+}
+
 /** Parse one non-submessage value of @p row's type into @p dest. */
 static pb_tf_err_t pb_tf_parse_scalar(struct pb_tf_parser *ps, const pb_tf_field_t *row,
 				      pb_size_t data_size, void *dest)
@@ -472,10 +815,13 @@ static pb_tf_err_t pb_tf_parse_scalar(struct pb_tf_parser *ps, const pb_tf_field
 		return pb_tf_fail(ps, PB_TF_ERR_UNSUPPORTED, start, row->name);
 
 	case PB_TF_VT_STRING:
+		return pb_tf_write_string(ps, row, data_size, dest);
+
 	case PB_TF_VT_BYTES:
+		return pb_tf_write_bytes(ps, row, data_size, dest);
+
 	case PB_TF_VT_FIXED_LENGTH_BYTES:
-		/* TODO(milestone 4): quoting and escape sequences. */
-		return pb_tf_fail(ps, PB_TF_ERR_UNSUPPORTED, start, row->name);
+		return pb_tf_write_fixed_bytes(ps, row, data_size, dest);
 
 	default:
 		/* MESSAGE and MSG_W_CB never reach here; EXTENSION is unreachable. */

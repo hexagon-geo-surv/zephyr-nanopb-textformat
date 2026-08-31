@@ -204,6 +204,11 @@ Out of scope — each a strict narrowing except the last:
 - **one extension:** optional outer braces on *input*. On output they are a separate off-by-default
   flag, so compact mode emits `a: 1, b: 2` — valid standalone text format that protoc will parse.
 
+One further documented narrowing, from milestone 4: **every raw byte below 0x20 is refused inside a
+quoted literal**. protoc certainly rejects an unescaped newline; for a literal tab this is stricter
+than protoc. Narrowing is safe for a subset, and costs nothing real -- the printer escapes control
+characters so round-trip is unaffected, and shell input never carries a raw tab past line editing.
+
 Documented caveats: field names must be `lower_snake_case` in the `.proto` (fact 8); `PB_TF_DEFINE`
 is **file scope only**; init semantics are zero-init, not proto2 `X_init_default` (those defaults
 live in `desc->default_value` and nanopb's decoder for them is `static`); and the byte capacity of a

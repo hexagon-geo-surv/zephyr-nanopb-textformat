@@ -1194,3 +1194,329 @@ ZTEST(pb_tf_submsg, test_non_static_allocation_is_unsupported)
 		      PB_TF_ERR_UNSUPPORTED);
 	zassert_str_equal(st.field, "cb_str");
 }
+
+/*
+ * ===========================================================================
+ * Milestone 4: strings and bytes.
+ * ===========================================================================
+ */
+
+ZTEST_SUITE(pb_tf_text, NULL, NULL, NULL, NULL, NULL);
+
+ZTEST(pb_tf_text, test_plain_string)
+{
+	fx_scalars_t m;
+	pb_tf_status_t st;
+	pb_tf_err_t err = pb_tf_parse(&fx_scalars_t_tf, &m, "f_string: \"hello\"", 0U, &st);
+
+	zassert_equal(err, PB_TF_OK, "%s", pb_tf_strerror(st.code));
+	zassert_str_equal(m.f_string, "hello");
+}
+
+/* Either quote opens a literal; the other is then an ordinary byte inside. */
+ZTEST(pb_tf_text, test_both_quote_styles)
+{
+	fx_scalars_t m;
+
+	zassert_equal(pb_tf_parse(&fx_scalars_t_tf, &m, "f_string: 'single'", 0U, NULL), PB_TF_OK);
+	zassert_str_equal(m.f_string, "single");
+
+	zassert_equal(pb_tf_parse(&fx_scalars_t_tf, &m, "f_string: \"it's\"", 0U, NULL), PB_TF_OK);
+	zassert_str_equal(m.f_string, "it's");
+
+	zassert_equal(pb_tf_parse(&fx_scalars_t_tf, &m, "f_string: 'say \"hi\"'", 0U, NULL),
+		      PB_TF_OK);
+	zassert_str_equal(m.f_string, "say \"hi\"");
+
+	/* An empty literal is legal. */
+	zassert_equal(pb_tf_parse(&fx_scalars_t_tf, &m, "f_string: \"\"", 0U, NULL), PB_TF_OK);
+	zassert_str_equal(m.f_string, "");
+}
+
+ZTEST(pb_tf_text, test_simple_escapes)
+{
+	fx_scalars_t m;
+	pb_tf_status_t st;
+	pb_tf_err_t err = pb_tf_parse(&fx_scalars_t_tf, &m,
+				      "f_string: \"\\a\\b\\f\\n\\r\\t\\v\\?\\\\\\'\\\"\"", 0U, &st);
+
+	zassert_equal(err, PB_TF_OK, "%s", pb_tf_strerror(st.code));
+	zassert_str_equal(m.f_string, "\a\b\f\n\r\t\v?\\'\"");
+}
+
+/* \xH and \xHH, via Zephyr's char2hex. */
+ZTEST(pb_tf_text, test_hex_escapes)
+{
+	fx_scalars_t m;
+	pb_tf_status_t st;
+	pb_tf_err_t err;
+
+	err = pb_tf_parse(&fx_scalars_t_tf, &m, "f_bytes: \"\\x41\\x7\\xfF\"", 0U, &st);
+	zassert_equal(err, PB_TF_OK, "%s", pb_tf_strerror(st.code));
+	zassert_equal(m.f_bytes.size, 3, "got %u", m.f_bytes.size);
+	zassert_equal(m.f_bytes.bytes[0], 0x41);
+	zassert_equal(m.f_bytes.bytes[1], 0x07);
+	zassert_equal(m.f_bytes.bytes[2], 0xFF);
+
+	/* \x with no hex digit at all. */
+	zassert_equal(pb_tf_parse(&fx_scalars_t_tf, &m, "f_bytes: \"\\xz\"", 0U, NULL),
+		      PB_TF_ERR_SYNTAX);
+}
+
+ZTEST(pb_tf_text, test_octal_escapes)
+{
+	fx_scalars_t m;
+	pb_tf_status_t st;
+	pb_tf_err_t err = pb_tf_parse(&fx_scalars_t_tf, &m, "f_bytes: \"\\0\\7\\77\\377\"", 0U, &st);
+
+	zassert_equal(err, PB_TF_OK, "%s", pb_tf_strerror(st.code));
+	zassert_equal(m.f_bytes.size, 4, "got %u", m.f_bytes.size);
+	zassert_equal(m.f_bytes.bytes[0], 0);
+	zassert_equal(m.f_bytes.bytes[1], 7);
+	zassert_equal(m.f_bytes.bytes[2], 077);
+	zassert_equal(m.f_bytes.bytes[3], 0xFF);
+
+	/* Three octal digits can exceed a byte. */
+	zassert_equal(pb_tf_parse(&fx_scalars_t_tf, &m, "f_bytes: \"\\400\"", 0U, NULL),
+		      PB_TF_ERR_RANGE);
+}
+
+/* An embedded NUL is fine in bytes: the length is carried separately. */
+ZTEST(pb_tf_text, test_bytes_may_contain_nul)
+{
+	fx_scalars_t m;
+	pb_tf_status_t st;
+	pb_tf_err_t err = pb_tf_parse(&fx_scalars_t_tf, &m, "f_bytes: \"a\\x00b\"", 0U, &st);
+
+	zassert_equal(err, PB_TF_OK, "%s", pb_tf_strerror(st.code));
+	zassert_equal(m.f_bytes.size, 3, "got %u", m.f_bytes.size);
+	zassert_equal(m.f_bytes.bytes[1], 0);
+	zassert_equal(m.f_bytes.bytes[2], 'b');
+}
+
+ZTEST(pb_tf_text, test_unicode_escapes_become_utf8)
+{
+	static const struct {
+		const char *text;
+		const char *want;
+		size_t len;
+	} cases[] = {
+		/* One, two and three UTF-8 bytes. */
+		{"f_bytes: \"\\u0041\"", "\x41", 1},
+		{"f_bytes: \"\\u00e9\"", "\xC3\xA9", 2},
+		{"f_bytes: \"\\u20AC\"", "\xE2\x82\xAC", 3},
+		{"f_bytes: \"\\u0000\"", "\x00", 1},
+		{"f_bytes: \"\\u07FF\"", "\xDF\xBF", 2},
+		{"f_bytes: \"\\uFFFF\"", "\xEF\xBF\xBF", 3},
+	};
+
+	ARRAY_FOR_EACH(cases, i) {
+		fx_scalars_t m;
+		pb_tf_status_t st;
+		pb_tf_err_t err = pb_tf_parse(&fx_scalars_t_tf, &m, cases[i].text, 0U, &st);
+
+		zassert_equal(err, PB_TF_OK, "'%s': %s", cases[i].text, pb_tf_strerror(st.code));
+		zassert_equal(m.f_bytes.size, cases[i].len, "'%s' gave %u bytes", cases[i].text,
+			      m.f_bytes.size);
+		zassert_mem_equal(m.f_bytes.bytes, cases[i].want, cases[i].len, "'%s'",
+				  cases[i].text);
+	}
+}
+
+/*
+ * A lone surrogate must be refused, not encoded. Emitting one would produce
+ * ill-formed UTF-8 and make a CONFIG_NANOPB_VALIDATE_UTF8 build reject a struct
+ * this parser had filled.
+ */
+ZTEST(pb_tf_text, test_lone_surrogate_is_rejected)
+{
+	static const char *const bad[] = {
+		"f_string: \"\\ud800\"",
+		"f_string: \"\\uDBFF\"",
+		"f_string: \"\\udc00\"",
+		"f_string: \"\\uDFFF\"",
+		/* A surrogate pair is out of scope, so it fails at the first half. */
+		"f_string: \"\\ud83d\\ude00\"",
+	};
+
+	ARRAY_FOR_EACH(bad, i) {
+		fx_scalars_t m;
+
+		zassert_equal(pb_tf_parse(&fx_scalars_t_tf, &m, bad[i], 0U, NULL),
+			      PB_TF_ERR_SYNTAX, "'%s' must be refused", bad[i]);
+	}
+
+	/* The code points either side of the surrogate block are fine. */
+	fx_scalars_t ok;
+
+	zassert_equal(pb_tf_parse(&fx_scalars_t_tf, &ok, "f_string: \"\\ud7ff\"", 0U, NULL),
+		      PB_TF_OK);
+	zassert_equal(pb_tf_parse(&fx_scalars_t_tf, &ok, "f_string: \"\\ue000\"", 0U, NULL),
+		      PB_TF_OK);
+}
+
+ZTEST(pb_tf_text, test_malformed_escapes_and_literals)
+{
+	static const struct {
+		const char *text;
+		pb_tf_err_t want;
+	} cases[] = {
+		/* \U and surrogate pairs are out of scope. */
+		{"f_string: \"\\U0001F600\"", PB_TF_ERR_SYNTAX},
+		{"f_string: \"\\q\"", PB_TF_ERR_SYNTAX},
+		{"f_string: \"\\u12\"", PB_TF_ERR_SYNTAX},
+		{"f_string: \"\\u\"", PB_TF_ERR_SYNTAX},
+		{"f_string: \"unterminated", PB_TF_ERR_SYNTAX},
+		{"f_string: 'mismatched\"", PB_TF_ERR_SYNTAX},
+		{"f_string: \"trailing\\", PB_TF_ERR_SYNTAX},
+		/* A raw newline is not valid inside a literal. */
+		{"f_string: \"line\nbreak\"", PB_TF_ERR_SYNTAX},
+		{"f_string: \"tab\there\"", PB_TF_ERR_SYNTAX},
+		/* A bare word where a literal belongs. */
+		{"f_string: hello", PB_TF_ERR_TYPE},
+		{"f_string: 5", PB_TF_ERR_TYPE},
+	};
+
+	ARRAY_FOR_EACH(cases, i) {
+		fx_scalars_t m;
+
+		zassert_equal(pb_tf_parse(&fx_scalars_t_tf, &m, cases[i].text, 0U, NULL),
+			      cases[i].want, "'%s'", cases[i].text);
+	}
+}
+
+/* Adjacent string concatenation is out of scope and must not silently join. */
+ZTEST(pb_tf_text, test_adjacent_literals_rejected)
+{
+	fx_scalars_t m;
+
+	zassert_equal(pb_tf_parse(&fx_scalars_t_tf, &m, "f_string: \"a\" \"b\"", 0U, NULL),
+		      PB_TF_ERR_SYNTAX);
+}
+
+/* nanopb's bound is size + 1 <= data_size, so data_size - 1 characters fit. */
+ZTEST(pb_tf_text, test_string_capacity)
+{
+	fx_scalars_t m;
+	pb_tf_status_t st;
+	const size_t cap = sizeof(m.f_string) - 1U;
+	pb_tf_err_t err;
+
+	zassert_equal(cap, 15, "the fixture declares max_size:16");
+
+	err = pb_tf_parse(&fx_scalars_t_tf, &m, "f_string: \"123456789012345\"", 0U, &st);
+	zassert_equal(err, PB_TF_OK, "%zu characters must fit: %s", cap,
+		      pb_tf_strerror(st.code));
+	zassert_equal(strlen(m.f_string), cap);
+
+	zassert_equal(pb_tf_parse(&fx_scalars_t_tf, &m, "f_string: \"1234567890123456\"", 0U, &st),
+		      PB_TF_ERR_NO_SPACE, "one character past the array must not fit");
+	zassert_str_equal(st.field, "f_string");
+}
+
+/*
+ * The bytes capacity is data_size minus the pb_bytes_array_t header. Derived
+ * rather than hardcoded because tail padding can make it exceed max_size.
+ */
+ZTEST(pb_tf_text, test_bytes_capacity)
+{
+	fx_scalars_t m;
+	pb_tf_status_t st;
+	const size_t cap = sizeof(m.f_bytes) - offsetof(pb_bytes_array_t, bytes);
+	pb_tf_err_t err;
+
+	zassert_true(cap >= 8, "the fixture declares max_size:8, got %zu", cap);
+
+	err = pb_tf_parse(&fx_scalars_t_tf, &m, "f_bytes: \"12345678\"", 0U, &st);
+	zassert_equal(err, PB_TF_OK, "%s", pb_tf_strerror(st.code));
+	zassert_equal(m.f_bytes.size, 8, "got %u", m.f_bytes.size);
+
+	if (cap == 8U) {
+		zassert_equal(pb_tf_parse(&fx_scalars_t_tf, &m, "f_bytes: \"123456789\"", 0U, &st),
+			      PB_TF_ERR_NO_SPACE);
+		zassert_str_equal(st.field, "f_bytes");
+	}
+}
+
+/*
+ * fixed_length_bytes has no count member, so nanopb accepts either exactly
+ * data_size bytes or an empty value meaning all zeros.
+ */
+ZTEST(pb_tf_text, test_fixed_length_bytes)
+{
+	fx_scalars_t m;
+	pb_tf_status_t st;
+	pb_tf_err_t err;
+
+	zassert_equal(sizeof(m.f_fixed_bytes), 4, "the fixture declares max_size:4");
+
+	err = pb_tf_parse(&fx_scalars_t_tf, &m, "f_fixed_bytes: \"abcd\"", 0U, &st);
+	zassert_equal(err, PB_TF_OK, "%s", pb_tf_strerror(st.code));
+	zassert_mem_equal(m.f_fixed_bytes, "abcd", 4);
+
+	/* Empty means all zeros, matching pb_decode.c's special case. */
+	(void)memset(m.f_fixed_bytes, 0xAA, sizeof(m.f_fixed_bytes));
+	err = pb_tf_parse(&fx_scalars_t_tf, &m, "f_fixed_bytes: \"\"", PB_TF_NOINIT, &st);
+	zassert_equal(err, PB_TF_OK, "%s", pb_tf_strerror(st.code));
+	zassert_mem_equal(m.f_fixed_bytes, "\0\0\0\0", 4, "an empty value means all zeros");
+
+	/* Too short is a wrong-shaped literal, not an overflow. */
+	zassert_equal(pb_tf_parse(&fx_scalars_t_tf, &m, "f_fixed_bytes: \"abc\"", 0U, &st),
+		      PB_TF_ERR_TYPE);
+	zassert_str_equal(st.field, "f_fixed_bytes");
+
+	/* Too long overflows. */
+	zassert_equal(pb_tf_parse(&fx_scalars_t_tf, &m, "f_fixed_bytes: \"abcde\"", 0U, NULL),
+		      PB_TF_ERR_NO_SPACE);
+}
+
+ZTEST(pb_tf_text, test_repeated_string)
+{
+	fx_shapes_t m;
+	pb_tf_status_t st;
+	pb_tf_err_t err = pb_tf_parse(&fx_shapes_t_tf, &m, "rep_string: [\"ab\", \"cd\"]", 0U, &st);
+
+	zassert_equal(err, PB_TF_OK, "%s", pb_tf_strerror(st.code));
+	zassert_equal(m.rep_string_count, 2, "got %u", m.rep_string_count);
+	zassert_str_equal(m.rep_string[0], "ab");
+	zassert_str_equal(m.rep_string[1], "cd");
+
+	/* max_count is 2. */
+	zassert_equal(pb_tf_parse(&fx_shapes_t_tf, &m, "rep_string: [\"a\",\"b\",\"c\"]", 0U, NULL),
+		      PB_TF_ERR_TOO_MANY);
+
+	/* Each element is bounded by its own element size, not the whole array. */
+	zassert_equal(pb_tf_parse(&fx_shapes_t_tf, &m, "rep_string: [\"12345678\"]", 0U, &st),
+		      PB_TF_ERR_NO_SPACE, "element capacity is sizeof(rep_string[0]) - 1");
+}
+
+ZTEST(pb_tf_text, test_oneof_string_member)
+{
+	fx_shapes_t m;
+	pb_tf_status_t st;
+	pb_tf_err_t err = pb_tf_parse(&fx_shapes_t_tf, &m, "c_str: \"pick\"", 0U, &st);
+
+	zassert_equal(err, PB_TF_OK, "%s", pb_tf_strerror(st.code));
+	zassert_equal(m.which_choice, FX_SHAPES_C_STR_TAG);
+	zassert_str_equal(m.choice.c_str, "pick");
+
+	/* Switching away and back must not leave the old member's bytes behind. */
+	err = pb_tf_parse(&fx_shapes_t_tf, &m, "c_str: \"1234567\" c_msg { a: 1 } c_str: \"x\"", 0U,
+			  &st);
+	zassert_equal(err, PB_TF_OK, "%s", pb_tf_strerror(st.code));
+	zassert_equal(m.which_choice, FX_SHAPES_C_STR_TAG);
+	zassert_str_equal(m.choice.c_str, "x");
+}
+
+/* Strings inside a submessage take the same path. */
+ZTEST(pb_tf_text, test_string_in_submessage)
+{
+	fx_shapes_t m;
+	pb_tf_status_t st;
+	pb_tf_err_t err =
+		pb_tf_parse(&fx_shapes_t_tf, &m, "rep_string: [\"x\"] sing_msg { a: 1 }", 0U, &st);
+
+	zassert_equal(err, PB_TF_OK, "%s", pb_tf_strerror(st.code));
+	zassert_str_equal(m.rep_string[0], "x");
+	zassert_equal(m.sing_msg.a, 1);
+}
