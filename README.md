@@ -188,8 +188,11 @@ root.
 The library is C99-compatible source compiled at C11 — `pb.h` defaults `PB_STATIC_ASSERT` to
 `_Static_assert`, so any translation unit including it needs C11. Same as nanopb itself.
 
-`docs/current_plan.md` is the working design document, including the decisions that were revised
-during implementation and the measurements behind them.
+[`docs/original_plan.md`](docs/original_plan.md) is the design document this was built from. It is
+kept as a record rather than as current documentation — read `README.md` and
+[`docs/dialect.md`](docs/dialect.md) for how the library behaves today. Its value is the reasoning:
+each decision that was revised during implementation is marked in place, with the measurement that
+forced it.
 
 ## License
 

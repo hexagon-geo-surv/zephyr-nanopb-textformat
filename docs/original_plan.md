@@ -614,5 +614,5 @@ reading; fact 9's line numbers re-verified and its wildcard caveat strengthened.
 One API addition beyond the plan: `pb_tf_print_buf()`, because `pb_tf_out_buf()` cannot terminate a
 buffer for a message that prints nothing.
 
-What remains is the follow-up on zephlet#58, listed below and deliberately out of scope for this
-repository.
+What remains is the follow-up on zephlet#58, listed under "Out of scope" above and deliberately not
+part of this repository.
