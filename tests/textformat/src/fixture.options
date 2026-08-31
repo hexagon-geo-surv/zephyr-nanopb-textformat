@@ -1,0 +1,17 @@
+# Sizes for the STATIC allocation this library supports.
+fx_scalars.f_string       max_size:16
+fx_scalars.f_bytes        max_size:8
+fx_scalars.f_fixed_bytes  max_size:4, fixed_length:true
+# int_size IS_8 -> int8_t storage, so iter.data_size == 1. Proves the value
+# writer dispatches on data_size instead of assuming 4 bytes.
+fx_scalars.f_narrow       int_size:IS_8
+# IS_32 on a proto int64 -> 4-byte storage. Proves the 64->32 narrowing the
+# value writer must handle, in every build config.
+fx_scalars.f_narrow32     int_size:IS_32
+
+fx_shapes.rep_scalar      max_count:4
+fx_shapes.rep_msg         max_count:3
+fx_shapes.rep_string      max_count:2, max_size:8
+# fixed_count -> FIXARRAY htype, which the library rejects at runtime.
+fx_shapes.fixed_scalar    max_count:2, fixed_count:true
+fx_shapes.c_str           max_size:8

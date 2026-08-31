@@ -1,0 +1,4 @@
+name: nanopb_textformat
+build:
+  cmake: .
+  kconfig: Kconfig

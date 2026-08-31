@@ -1,0 +1,13 @@
+# West workspace fetched into the repo (see docs: `rip ws` to reset)
+/ws/zephyr/
+/ws/modules/
+/ws/.west/
+/ws/build*/
+/ws/twister-out*/
+
+# Build artefacts
+build*/
+twister-out*/
+*.pyc
+__pycache__/
+.DS_Store

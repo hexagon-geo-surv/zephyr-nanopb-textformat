@@ -1,0 +1,31 @@
+# Minimal T2 ("star") manifest for testing zephyr-nanopb-textformat.
+#
+# Only three Zephyr modules are imported:
+#   cmsis_6  - CMSIS 6; provides cmsis_core.h for Cortex-M (mps2/an385). The older
+#              "cmsis" project only serves Cortex-A/R in Zephyr 4.4.
+#   picolibc - default libc; provides strtod(), which CONFIG_NANOPB_TEXTFORMAT_FLOAT needs
+#   nanopb   - the library under test binds directly into nanopb-generated structs
+#
+# Bootstrap from the repository root:
+#   west init -l ws/manifest
+#   cd ws && west update --narrow --fetch-opt=--depth=1
+#   west packages pip --install
+#
+# Reset with `rip ws` (contents are gitignored).
+manifest:
+  remotes:
+    - name: zephyrproject-rtos
+      url-base: https://github.com/zephyrproject-rtos
+
+  projects:
+    - name: zephyr
+      remote: zephyrproject-rtos
+      revision: v4.4.0
+      import:
+        name-allowlist:
+          - cmsis_6
+          - picolibc
+          - nanopb
+
+  self:
+    path: manifest

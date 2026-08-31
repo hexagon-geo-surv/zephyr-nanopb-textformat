@@ -1,0 +1,51 @@
+# Copyright (c) 2026 Rodrigo Peixoto
+# SPDX-License-Identifier: Apache-2.0
+
+config NANOPB_TEXTFORMAT
+	bool "Protobuf text format for nanopb messages"
+	depends on NANOPB
+	help
+	  Parse a subset of the protobuf text format
+	  (https://protobuf.dev/reference/protobuf/textformat-spec/) directly
+	  into a nanopb-generated struct, and print such a struct back out.
+
+	  Intended for hand-typed input, e.g. a Zephyr shell command:
+
+	    zlet ui_inst config {delay: 100, threshold: 500}
+
+	  Everything accepted is valid text format that protobuf's own parser
+	  accepts. See docs/dialect.md for the exact subset.
+
+if NANOPB_TEXTFORMAT
+
+config NANOPB_TEXTFORMAT_FLOAT
+	bool "Parse and print float and double fields"
+	default y
+	depends on !MINIMAL_LIBC
+	select CBPRINTF_FP_SUPPORT
+	help
+	  Enable float/double support. Parsing needs strtod(), which the minimal
+	  libc does not provide, hence the dependency. Printing needs
+	  CBPRINTF_FP_SUPPORT, which this selects.
+
+	  When disabled, a float or double field reports
+	  PB_TF_ERR_NO_FLOAT rather than failing the build, and neither strtod()
+	  nor floating-point formatting is linked in.
+
+	  Note: messages with 64-bit fields additionally need
+	  CBPRINTF_FULL_INTEGRAL for correct printing.
+
+config NANOPB_TEXTFORMAT_MAX_DEPTH
+	int "Maximum submessage nesting depth"
+	default 8
+	range 1 32
+	help
+	  Submessage recursion limit for both the parser and the printer. Each
+	  level costs one stack frame; exceeding it reports PB_TF_ERR_DEPTH
+	  instead of overflowing the stack.
+
+module = NANOPB_TEXTFORMAT
+module-str = nanopb_textformat
+source "subsys/logging/Kconfig.template.log_config"
+
+endif # NANOPB_TEXTFORMAT

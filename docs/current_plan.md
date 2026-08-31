@@ -1,0 +1,451 @@
+# `zephyr-nanopb-textformat` — minimal protobuf text-format parser/printer for nanopb on Zephyr
+
+## Context
+
+`zlet` (the zephlet shell frontend) supports exactly one field shape today: `STATIC, SINGULAR,
+<scalar>`. Everything else pastes into an undefined macro name and hard-fails the build
+(`frontends/shell/include/zephlet_shell_macros.h:30-31,139-141`). rodrigopex/zephlet#58 needs
+optional, repeated and submessage fields, and proves the macro-only design *cannot* recurse into a
+submessage's field list — the preprocessor can't re-enter a macro inside its own expansion.
+
+Issue #58 proposes a custom path grammar (`items[0].a=7`, `tags=1,2,3`). We already have a standard
+for this, so this repo builds a **subset of the protobuf text format** instead:
+
+```
+$ zlet ui_inst config {delay: 100, threshold: 500}
+$ zlet ui_inst config {tags: [1,2,3], inner: {a: 7}, inner: {a: 9}}
+$ zlet ui_inst get_config
+delay: 100
+threshold: 500
+```
+
+Outcome: a **Zephyr module** that binds text format directly into a nanopb struct and prints one
+back out. Everything it accepts is valid text format that protobuf's own parser accepts, with one
+documented deviation (optional outer braces, off by default on output).
+
+zephlet consumes it in a follow-up; this repo does not touch zephlet.
+
+## Decisions
+
+| | |
+|---|---|
+| Name | Repo/dir **`zephyr-nanopb-textformat`**; module.yml `name: nanopb_textformat`; header `nanopb_textformat.h`; Kconfig `NANOPB_TEXTFORMAT` (verified free — zephyr's nanopb module owns only `NANOPB_{ENABLE_MALLOC, MAX_REQUIRED_FIELDS, NO_ERRMSG, BUFFER_ONLY, WITHOUT_64BIT, ENCODE_ARRAYS_UNPACKED, VALIDATE_UTF8}`); symbols stay `pb_tf_*` / `PB_TF_*`. |
+| Binding | **Direct into the struct** via nanopb's `pb_field_iter_t`. No intermediate wire buffer. |
+| Field names | **X-macro in this library** over nanopb's generated `<MSG>_FIELDLIST`. No codegen changes. |
+| Scope | **Parse + print.** zephlet's `get_config` needs print; round-trip is the strongest test. |
+| Platform | **Zephyr-native.** Use Zephyr's utilities rather than reimplementing them. |
+| Shell input | **`SHELL_OPT_ARG_RAW`** — the handler gets the untouched remainder of `cmd_buff`. |
+| Printer | Engine is **`cbprintf`**; flags select multi-line/compact, braces, skip-defaults. Print-all default. |
+| Init | **`pb_tf_parse` clears the struct**, `PB_TF_NOINIT` opts out (mirrors `PB_DECODE_NOINIT`). |
+| Floats | `CONFIG_NANOPB_TEXTFORMAT_FLOAT`, `default y`, `depends on !MINIMAL_LIBC`, `select CBPRINTF_FP_SUPPORT`. |
+| Enums | **Numeric only**, both directions. Rationale below. |
+| Tests | **ztest + twister** on `mps2/an385` and `qemu_x86`, in a gitignored in-repo workspace. |
+| Zephyr | Pinned to **`v4.4.0`** (which pins nanopb `5499fd4c`) — the exact trees every fact below was verified against. |
+
+### Taken from Zephyr instead of written
+
+- **`cbprintf(cbprintf_cb out, void *ctx, fmt, ...)`** (`cbprintf.h:686`) is the printer's output
+  engine — its contract is literally "unbounded length without incurring the cost of a temporary
+  buffer", and `cbprintf_cb` (`cbprintf.h:294`) becomes the library's writer type. Deletes a
+  hand-rolled integer formatter and gives float formatting for free.
+- **`SHELL_OPT_ARG_RAW`** (`shell.h:61`) for command registration — see fact 9.
+- **`char2hex` / `hex2char` / `hex2bin` / `bin2hex`** (`sys/util.h:760-794`) for `\xHH` escapes and
+  bytes printing; the same helpers `zlet_shell_parse_hexbytes` already uses.
+- **`strtoull` / `strtoll`** — present in every Zephyr libc including minimal
+  (`lib/libc/minimal/source/stdlib/strtoull.c`), called with an explicit base after prefix sniffing.
+- **`IS_ENABLED()`**, **`BUILD_ASSERT`**, `ARRAY_SIZE`, `MIN`, `CLAMP`, and `util_macro.h`'s
+  `UTIL_CAT` for the X-macro glue.
+- **`LOG_MODULE_REGISTER` + `Kconfig.template.log_config`**, as zephlet's own `Kconfig` ends.
+- **ztest + twister**, matching `zephlet/tests/shell_macros/` down to the `testcase.yaml` shape.
+
+## Verified facts this design rests on
+
+All of these were read against **Zephyr `v4.4.0`** and the nanopb revision that tag pins
+(`5499fd4c9a478f8139eeb07a82c3b4468d6067f7`, nanopb-1.0.0-dev, `PB_PROTO_HEADER_VERSION 40`).
+Every cited file — `subsys/shell/shell.c`, `shell_utils.c`, `include/zephyr/sys/cbprintf.h`,
+`sys/util.h`, `shell/shell.h`, `boards/arm/mps2/mps2_an385.yaml`, `modules/nanopb/{CMakeLists.txt,
+Kconfig}` — is byte-identical at that tag, so the line numbers below are valid as written and need
+no re-verification during milestone 0.
+
+1. `pb.h:724-757` — nanopb dispatches submessage info as
+   `PB_SUBMSG_INFO_##htype(_PB_LTYPE_##ltype, structname, fieldname)` and relies on
+   `structname##_##fieldname##_MSGTYPE` (emitted at `nanopb_generator.py:1517-1531`, with a `ONEOF`
+   variant `<msg>_<union>_<member>_MSGTYPE`). **The submessage's C type is recoverable from an
+   X-macro row**, so the name table is a recursive tree with no runtime registry.
+   `pb.h:720-723`'s `PB_ONEOF_NAME(MEMBER, tuple)` destructures the parenthesised oneof fieldname,
+   so **oneof needs no special case**.
+2. **The `##` trap.** `PB_TF_SUB_PB_LTYPE_MESSAGE(t) &(t##_tf)` does **not** work: `t` is adjacent
+   to `##`, so C99 6.10.3.3p2 suppresses argument expansion and it emits
+   `&(Msg_inner_MSGTYPE_tf)`. nanopb splits this across two macros for exactly this reason
+   (`pb.h:746-747` → `pb.h:757`). Every `_MSGTYPE`-consuming macro needs that second level.
+3. zephlet generates nanopb with **`--c-style`** (`tests/shell_macros/CMakeLists.txt:20`): FIELDLIST
+   is `TICK_CONFIG_FIELDLIST`, struct is `tick_config_t`, descriptor is `tick_config_t_msg`. So the
+   macro mirrors `PB_BIND(msgname, structname, width)`'s two-token form; keying the generated symbol
+   off `structname` makes it naming-style-agnostic.
+4. `pb.h:302-308` — **`PB_HTYPE_OPTIONAL == PB_HTYPE_SINGULAR == 0x10`** and
+   **`PB_HTYPE_REPEATED == PB_HTYPE_FIXARRAY == 0x20`**. Indistinguishable at runtime, so the row
+   carries the htype token from the macro; never read `PB_HTYPE(iter.type)`.
+5. `pb.h:878-898` — the ltype mapping is **lossy**: `FLOAT`/`FIXED32`/`SFIXED32` all collapse to
+   `PB_LTYPE_FIXED32`, `INT32`/`INT64`/`ENUM` to `PB_LTYPE_VARINT`. A runtime-only design *cannot*
+   tell whether to print `1.0` or `1`. The row's `vtype` (pre-map ltype token) is the only correct
+   source — this is why the table carries a type code, not just `{name, tag}`.
+6. `pb_common.c:74-117` — `STATIC REPEATED`: `pSize` = `&msg->field_count`, `data_size` = **one
+   element**. `STATIC OPTIONAL`: `pSize` = `&msg->has_field`. `STATIC SINGULAR` **and proto2
+   `REQUIRED`**: `size_offset == 0` so `pSize` is **NULL** — dereferencing it is a null write.
+   `FIXARRAY`: `pSize` points at `&iter->array_size`, *inside the iterator*.
+7. `pb_common.c:188-193` — `pb_field_iter_next()` **wraps around**; iteration is `do/while`.
+   `pb_common.c:156-164` — `pb_field_iter_begin()` returns **false for an empty message**
+   (`field_count == 0`), which `Empty` in `zephlet.proto` is; check the return value.
+   Row order == `field_info` order (the generator sorts by tag and feeds the same FIELDLIST to
+   `PB_BIND`), so the printer can drive `pb_field_iter_next()` in lockstep instead of re-`find`ing.
+8. Nothing in nanopb stores a field-name string — not `pb_msgdesc_t` (`pb.h:349-360`), not the
+   generated `.pb.c`. The X-macro `#fieldname` stringification is the only source. Under
+   `--c-style`, `var_name()` runs `underscore()` (`nanopb_generator.py:171-188`), which is identity
+   for `lower_snake_case` protos; a `camelCase` field would only be accepted mangled. Documented.
+9. **Shell input.** `CONFIG_SHELL_ARGC_MAX` defaults to 20 and `shell.c:677-679` **silently drops**
+   everything past the cap (~8 text-format fields), and `make_argv` collapses whitespace runs — so
+   joining `argv` silently corrupts both long messages and string values.
+   `SHELL_OPT_ARG_RAW` on a leaf command makes `active_cmd_prepare` (`shell.c:585-590`) stop
+   tokenising, and `shell.c:800-806` hands the handler the **untouched remainder** of `cmd_buff`:
+   no quote stripping, no backslash processing, no collapse, no ARGC cap. Document three caveats:
+   don't wrap the argument in `'…'` (quotes are no longer stripped), `CONFIG_SHELL_CMD_BUFF_SIZE`
+   caps the line at 256 by default, and `CONFIG_SHELL_WILDCARD=y` rewrites `cmd_buff` so `*`/`?`
+   inside values are a hazard.
+10. `nanopb_generator.py:643-648` — a **proto3 singular message field is `OPTIONAL` with a `has_`
+    bit**, confirming issue #58's "rows 4 and 5 are byte-identical". The `proto3_singular_msgs`
+    option flips it to `SINGULAR` with no `has_`; the row-carried htype handles both (fact 6).
+11. **`MSG_W_CB` needs nothing.** `nanopb_generator.py:789-793` puts `pb_callback_t cb_<name>;`
+    *before* `bool has_<name>;`, and `size_offset` derives from `has_`, so the callback sits strictly
+    before `pSize` and writing `pField` can never touch it. Alias it to `MESSAGE`.
+12. **Widths are never assumable.** nanopb's `int_size` option (`nanopb.proto:30-31,68`) produces
+    1- and 2-byte scalars; `PB_CONVERT_DOUBLE_FLOAT` (`pb.h:48`) stores a proto `double` as a C
+    `float`; **`int_size: IS_32` on a proto `int64` narrows it to `int32_t`**; and an enum's
+    `data_size` is implementation-defined (`-fshort-enums` → 1 or 2). Every numeric write must
+    dispatch on `data_size` exactly as `pb_decode.c:1469-1478,1513-1522` does.
+    **Corrected during milestone 1:** an earlier reading claimed `PB_WITHOUT_64BIT`
+    (`CONFIG_NANOPB_WITHOUT_64BIT`, wired to the define at
+    `zephyr/modules/nanopb/CMakeLists.txt:37-38`) narrows `int64` storage. It does not. The
+    generator has no knowledge of the define — `nanopb_generator.py` never mentions it — so the
+    struct member stays `int64_t`, and `pb_int64_t` is a **`pb_decode.c`-local macro**
+    (`pb_decode.c:52-58`), not a public `pb.h` type. What the define actually does is make the
+    codec **reject** a genuine 8-byte field at runtime with `"invalid data_size"`
+    (`pb_decode.c:452-453`) and compile out `pb_decode_varint`/`pb_decode_fixed64` entirely
+    (`pb_decode.c:229,1427`). So `int_size` is the only thing that changes a width, and the
+    `no64` config proves 8-byte fields degrade cleanly — the same shape as `nofloat`, not a
+    narrowing test.
+13. `lib/libc/minimal/source/stdlib/` has `strtoull.c`/`strtoll.c` but **no `strtod.c`** — hence
+    `depends on !MINIMAL_LIBC` on the float option. `Kconfig.cbprintf`'s `CBPRINTF_INTEGRAL_CONV`
+    choice can drop 64-bit conversion, so 64-bit fields need `CONFIG_CBPRINTF_FULL_INTEGRAL`.
+14. A message with `extensions 100 to max;` gets a synthetic row
+    (`nanopb_generator.py:1090-1108`): `X(a, CALLBACK, OPTIONAL, EXTENSION, extensions, 100)`. Both
+    the `EXTENSION` vtype and sub macros must exist or the TU won't compile.
+15. `{` can never legally start a top-level text-format Message (`FieldName` is `[` or `IDENT`), so
+    optional outer braces are unambiguous — provided the matching `}` is required to be the last
+    token, so `{a:1} junk` errors.
+16. `mps2/an385` (`boards/arm/mps2/mps2_an385.yaml`) is `simulation: qemu`, `testing: default: true`,
+    Cortex-M3, 4 MB RAM/flash — the canonical replacement for the old `qemu_cortex_m3`.
+    `qemu_x86` (`boards/qemu/x86/qemu_x86.yaml`) is the faster second target. The three modules a
+    minimal manifest needs are **`cmsis_6`**, `nanopb` and `picolibc`. **Corrected during milestone
+    0:** an earlier reading of `zephyr/west.yml:119` said `cmsis`, but in v4.4.0 Cortex-M takes
+    `cmsis_core.h` from `zephyr/modules/cmsis_6/` (`Kconfig:8-10`,
+    `select HAS_CMSIS_CORE_M if CPU_CORTEX_M`) while `zephyr/modules/cmsis/` now serves only
+    Cortex-A/R — allowlisting `cmsis` fails the build with `fatal error: cmsis_core.h: No such file
+    or directory`. Note west leaves a de-allowlisted project on disk; `rip modules/hal/cmsis` after
+    changing the list.
+
+## The dialect
+
+Supported — all valid text format:
+
+| Production | Example |
+|---|---|
+| scalar field | `delay: 100` |
+| message field, colon optional | `inner { a: 7 }` / `inner: {a: 7}` |
+| scalar / message short list | `tags: [1, 2, 3]` / `items: [{a: 1}, {a: 2}]` |
+| empty list | `x: []` — legal per spec, parses as a no-op |
+| repeated by repetition | `tags: 1 tags: 2` (appends) |
+| optional `,` / `;` separators | `{a: 1, b: 2}` / `{a: 1; b: 2}` |
+| integers | decimal, `0x` hex, **and octal** (`0755` → 493), optional `-` |
+| floats | `1.0`, `-2.5e3`, `1f`, `inf`, `nan` (behind `CONFIG_NANOPB_TEXTFORMAT_FLOAT`) |
+| bools | `true`/`false`/`True`/`False`/`t`/`f`/`1`/`0`; output is always `true`/`false` |
+| strings / bytes | `"…"` / `'…'` with `\a \b \f \n \r \t \v \? \\ \' \" \xH[H] \NNN \uXXXX` |
+| oneof | one member per union; switching members clears the union first |
+
+Out of scope — each a strict narrowing except the last:
+
+- `<msg>` angle-bracket delimiters (nothing generates them; protobuf's printer always emits `{}`)
+- `#` line comments, maps, groups, extensions `[a.b]: v`, `Any` (`[type.url/T] {…}`)
+- adjacent string concatenation (`"a" "b"`) — in the spec, never emitted by protobuf's printer
+- **enum values by name**, both directions — evaluated and declined. A field row *can* reach its enum
+  type (`nanopb_generator.py:1535-1553` emits `<Msg>_<field>_ENUMTYPE`, the analogue of `_MSGTYPE`),
+  but nanopb generates **no value list**, `enum_to_string` is **one-way**, and under `--c-style` the
+  type token is `mode_t` while the name function is `mode_name` and the bounds are
+  `_MODE_MIN`/`_MODE_MAX` (`nanopb_generator.py:465-504`) — the preprocessor can neither uppercase
+  nor strip `_t`, so none of those are derivable from the row. Names would cost a registration line
+  per enum type plus the strings in flash. If revisited, the shape is a `pb_tf_enum_t` referenced
+  from the row exactly like `sub`, so nothing here forecloses it.
+- `\U000XXXXX` escapes and `\u` surrogate pairs — a lone surrogate is rejected rather than emitted
+  as invalid UTF-8, which also keeps `CONFIG_NANOPB_VALIDATE_UTF8` builds from failing on a struct
+  this parser filled
+- `POINTER` / `CALLBACK` allocation, `FIXARRAY` (`fixed_count`), and `EXTENSION` fields → clear
+  **runtime** errors, not build breaks. This is the fix for companion issue #57.
+- proto2 `required` presence is **not** enforced — stated in the header, not silently ambiguous
+- **one extension:** optional outer braces on *input*. On output they are a separate off-by-default
+  flag, so compact mode emits `a: 1, b: 2` — valid standalone text format that protoc will parse.
+
+Documented caveats: field names must be `lower_snake_case` in the `.proto` (fact 8); `PB_TF_DEFINE`
+is **file scope only**; init semantics are zero-init, not proto2 `X_init_default` (those defaults
+live in `desc->default_value` and nanopb's decoder for them is `static`); and the byte capacity of a
+`bytes` field is `data_size - offsetof(pb_bytes_array_t, bytes)`, which can exceed the declared
+`max_size` by tail padding — same as nanopb itself, so don't advertise it as exact.
+
+## Layout
+
+Step 0 is a rename: `protobuf_textformat_parser` → `zephyr-nanopb-textformat` (the directory is empty, so
+this is free, and doing it first avoids touching paths later).
+
+```
+zephyr-nanopb-textformat/
+  CMakeLists.txt            zephyr_library under if(CONFIG_NANOPB_TEXTFORMAT)
+  Kconfig                   NANOPB_TEXTFORMAT, _FLOAT, _MAX_DEPTH, + log_config template
+  zephyr/module.yml         name: nanopb_textformat
+  include/nanopb_textformat.h   public API + the PB_TF_DEFINE X-macro machinery
+  src/nanopb_textformat_common.c        name lookup, iterator glue, pb_tf_strerror, pb_tf_clear
+  src/nanopb_textformat_parse.c         lexer + recursive-descent parser + value binding
+  src/nanopb_textformat_print.c         recursive printer, driven by cbprintf
+  tests/textformat/         one ztest app, five suites, + testcase.yaml
+  docs/dialect.md           which spec productions are in, which are out, and why
+  ws/                       gitignored west workspace (see Verification)
+  .gitignore                ws/ , twister-out/
+```
+
+### 1. Descriptor and X-macro
+
+```c
+typedef struct pb_tf_msg_s pb_tf_msg_t;
+
+typedef struct {
+    const char        *name;   /* NULL for the terminator row and for EXTENSION rows */
+    uint16_t           tag;
+    uint8_t            vtype;  /* PB_TF_VT_* — pre-map ltype token, closes fact 5 */
+    uint8_t            rules;  /* atype | htype token, closes fact 4 */
+    const pb_tf_msg_t *sub;    /* MESSAGE/MSG_W_CB only, else NULL */
+} pb_tf_field_t;
+
+struct pb_tf_msg_s {
+    const pb_msgdesc_t  *desc;
+    const pb_tf_field_t *fields;
+    uint16_t             count;
+    uint16_t             struct_size;  /* sizeof(structname) — enables pb_tf_clear */
+};
+
+#define PB_TF_DEFINE(msgname, structname)                                     \
+    msgname##_FIELDLIST(PB_TF_GEN_EXTERN, structname)                         \
+    static const pb_tf_field_t structname##__tf_fields[] = {                  \
+        msgname##_FIELDLIST(PB_TF_GEN_ROW, structname)                        \
+        { NULL, 0, 0, 0, NULL } /* sentinel: also fixes empty messages */     \
+    };                                                                       \
+    const pb_tf_msg_t structname##_tf = {                                     \
+        &structname##_msg, structname##__tf_fields,                           \
+        (uint16_t)(ARRAY_SIZE(structname##__tf_fields) - 1u),                 \
+        (uint16_t)sizeof(structname)                                          \
+    }
+```
+
+Three dispatch families, each copying a pattern nanopb already uses, each with the **two-level
+indirection fact 2 requires**:
+
+```c
+#define PB_TF_SUB_PB_LTYPE_MESSAGE(t)   PB_TF_SUBDESC(t)   /* t expanded here… */
+#define PB_TF_SUB_PB_LTYPE_MSG_W_CB(t)  PB_TF_SUBDESC(t)
+#define PB_TF_SUBDESC(t)                &(t##_tf)          /* …pasted only here */
+#define PB_TF_SUB_PB_LTYPE_BOOL(t)      NULL               /* + 18 more, all NULL */
+```
+
+- The 21 ltype tokens are `BOOL, BYTES, DOUBLE, ENUM, UENUM, FIXED32, FIXED64, FLOAT, INT32, INT64,
+  MESSAGE, MSG_W_CB, SFIXED32, SFIXED64, SINT32, SINT64, STRING, UINT32, UINT64, EXTENSION,
+  FIXED_LENGTH_BYTES` — **19 NULLs**, and `EXTENSION` and `FIXED_LENGTH_BYTES` are the two easy to
+  forget (fact 14). `EXTENSION` rows get `name = NULL` so the name scan can never match them.
+- For non-`MESSAGE` ltypes the replacement list ignores `t`, so `structname##_##fieldname##_MSGTYPE`
+  is never substituted (C99 6.10.3.1p1) — exactly how nanopb's `PB_SI_PB_LTYPE_*` work.
+- `PB_TF_GEN_EXTERN` emits `extern const pb_tf_msg_t <sub>_tf;` for message rows, nothing otherwise,
+  and is expanded **first**, so declaration order is irrelevant and self-referential messages work.
+  Duplicate externs are legal C.
+- Names: `PB_TF_NAME_SINGULAR(fn)` is a **direct `#fn`** — routing it through a two-level stringizer
+  would prescan the argument, so a field named `errno` or `stdin` would stringize to its macro
+  *expansion*. Only the `ONEOF` variant needs two levels, to expand `PB_ONEOF_NAME(MEMBER, fn)`
+  before `#`. The two paths can disagree for such names; documented.
+
+Plus `PB_TF_FIELD_COUNT(FIELDLIST)`, mirroring zephlet's `ZLET_SHELL_FIELD_COUNT`, for
+`BUILD_ASSERT`s.
+
+### 2. Parser
+
+Single pass, recursive descent, no heap, no scratch buffers — strings and bytes unescape **directly
+into the destination**, bounded by `iter.data_size`. Writes go through `iter.pData` (identical to
+`pField` for STATIC, but it is what nanopb uses and degrades better).
+
+```
+message(tf, msg, terminator):
+  loop until terminator:
+    ident  -> linear scan tf->fields (skipping name == NULL)
+    row->vtype is MESSAGE ? optional ':' : required ':'
+    value | '[' [ value {',' value} ] ']'      /* '[' only if rules is REPEATED */
+    optional ',' | ';'
+```
+
+Storage dispatch on `row->rules`:
+
+| rules | action |
+|---|---|
+| `SINGULAR` / `REQUIRED` | write `pData`. **Never touch `pSize` — it is NULL** (fact 6). Repeated occurrences of a singular message *merge*, which plain writes already give. |
+| `OPTIONAL` | assert `pSize != NULL`, write `pData`, then `*(bool *)pSize = true` |
+| `REPEATED` | `n = *(pb_size_t *)pSize`; `n >= array_size` → `ERR_TOO_MANY`; **`memset` element `n`** (an appended element must not inherit ghost bytes); write `(char *)pData + n * data_size`; commit `n + 1` **only on success** |
+| `ONEOF` | if `*(pb_size_t *)pSize != tag`, **`memset(pData, 0, data_size)`** first — otherwise a new member inherits the previous member's union bytes; then set `which_` and write |
+| `FIXARRAY` | `ERR_UNSUPPORTED` — "fixed_count fields are not supported" |
+| `POINTER` / `CALLBACK` atype | `ERR_UNSUPPORTED`, with the field name |
+
+Value writing dispatches on `row->vtype` **and** `iter.data_size`, mirroring
+`pb_decode.c:1469-1478,1513-1522`'s chain verbatim (`sizeof(pb_int64_t)` / `int32_t` /
+`int_least16_t` / `int_least8_t`, else `"invalid data_size"`) — this is what makes enums,
+`int_size`, `PB_WITHOUT_64BIT` and `PB_CONVERT_DOUBLE_FLOAT` all correct (fact 12), and it means the
+lexer accumulator uses `pb_tf_uint64_t`/`pb_tf_int64_t` aliases rather than hard-coded `uint64_t`.
+Negative literals are rejected for the unsigned vtypes. `STRING` uses nanopb's exact bound —
+`len + 1 <= data_size`, i.e. `data_size - 1` characters, NUL always written. `MESSAGE` recurses under
+`CONFIG_NANOPB_TEXTFORMAT_MAX_DEPTH`.
+
+```c
+typedef struct { pb_tf_err_t code; uint16_t offset; const char *field; } pb_tf_status_t;
+/* -> "error at offset 14: value out of range for field 'threshold'" */
+```
+
+### 3. Printer
+
+Walks the row table in declaration order, driving `pb_field_iter_next()` in lockstep (fact 7) rather
+than re-`find`ing. Skips absent `OPTIONAL`, unselected `ONEOF` members, and `EXTENSION` rows.
+
+All formatting goes through `cbprintf(out, ctx, ...)`, so the writer is Zephyr's own `cbprintf_cb`
+and there is no temporary buffer in the print path. Float precision is explicit — `%.9g` for `float`,
+`%.17g` for `double` — because a wrong precision silently breaks round-trip.
+
+Flags: `PB_TF_MULTILINE` (default) / `PB_TF_COMPACT`, `PB_TF_BRACES` (off by default, so compact
+output is valid standalone text format), `PB_TF_SKIP_DEFAULTS`. **Print-all is the default** —
+implicit-presence scalars print even when zero, matching today's `get_config`, giving a complete
+picture of the struct, and round-tripping byte-exact into a cleared target.
+
+### 4. API
+
+```c
+pb_tf_err_t pb_tf_parse (const pb_tf_msg_t *tf, void *msg, const char *text,
+                         unsigned flags, pb_tf_status_t *status);
+                         /* clears msg unless PB_TF_NOINIT */
+pb_tf_err_t pb_tf_print (const pb_tf_msg_t *tf, const void *msg,
+                         cbprintf_cb out, void *ctx, unsigned flags);
+void        pb_tf_clear (const pb_tf_msg_t *tf, void *msg);
+const char *pb_tf_strerror(pb_tf_err_t code);
+/* bundled writer; ctx is pb_tf_buf_t { char *buf; size_t size, used; bool ovf; } */
+int         pb_tf_out_buf(int c, void *ctx);
+```
+
+## Milestones
+
+Each ends green under twister before the next starts.
+
+0. **Rename + workspace bootstrap.** Rename the directory, write `ws/manifest/west.yml`, run
+   `west init -l ws/manifest` then `west update --narrow --fetch-opt=--depth=1`, and confirm a
+   hello-world builds and *runs* on both `mps2/an385` and `qemu_x86`. Nothing else is worth doing
+   until QEMU actually boots on this machine.
+1. **Skeleton + macro machinery.** Module scaffolding and `tests/textformat/src/fixture.proto`
+   covering every shape: singular/optional/repeated scalars, submessage, repeated submessage, oneof,
+   depth 3, self-reference, string/bytes/fixed-length-bytes, enum, float, an empty message, a
+   `fixed_count` field, an `extensions` range, and an `int_size: IS_8` field. Test = *it compiles*,
+   plus `BUILD_ASSERT`s on the table, plus the fixture built twice — default naming and `--c-style`
+   — to lock fact 3.
+2. **Lexer + scalar parsing.** Singular, optional, repeated, `[...]` incl. empty, separators, all
+   integer bases, all bool spellings, the `data_size` dispatch chain, the full error table.
+3. **Submessages.** Colon-optional `{}`, repeated submessages, message lists, oneof (incl. the
+   union-clearing case), depth cap, and `FIXARRAY`/`POINTER`/`CALLBACK`/`EXTENSION` rejection.
+4. **Strings and bytes.** Escapes both ways via `char2hex`/`hex2char`, `\u` → UTF-8, lone-surrogate
+   rejection, nanopb's exact capacity bounds.
+5. **Printer** over `cbprintf` + round-trip suite across every flag combination.
+6. **Float** behind `CONFIG_NANOPB_TEXTFORMAT_FLOAT`, plus the `=n` variant proving float fields degrade
+   to a clean `ERR_UNSUPPORTED` rather than a build break.
+7. **Docs.** `README.md`, `docs/dialect.md`, and the zephlet integration sketch (including the
+   `SHELL_OPT_ARG_RAW` registration and its three caveats).
+
+## Verification
+
+### The workspace
+
+`ws/` is a gitignored T2 workspace living inside the repo, so `rip ws` fully resets it.
+`ws/manifest/west.yml` imports Zephyr with a three-module allowlist (fact 16):
+
+```yaml
+manifest:
+  projects:
+    - name: zephyr
+      url: https://github.com/zephyrproject-rtos/zephyr
+      revision: v4.4.0
+      import:
+        name-allowlist: [cmsis, picolibc, nanopb]
+```
+
+```
+$ west init -l ws/manifest
+$ cd ws && west update --narrow --fetch-opt=--depth=1
+$ west packages pip --install          # zephyr + nanopb python deps
+```
+
+`--narrow` fetches only the manifest-named revisions rather than every remote ref, and
+`--fetch-opt=--depth=1` makes each fetch shallow — together a fraction of the download for a
+workspace that only ever builds. The trade-off is no usable history in the fetched projects
+(`git log`/`bisect`/`describe` won't work); deepen a single project with `git fetch --unshallow` if
+that's ever needed.
+
+The module is injected into the test build via `EXTRA_ZEPHYR_MODULES` pointing at the repo root —
+exactly as `zephlet/tests/shell_macros/CMakeLists.txt:10` does. Note the two `zephyr` directories at
+different levels (`<repo>/zephyr/module.yml`, the module manifest, vs `<repo>/ws/zephyr/`, the
+fetched tree) are unrelated and unambiguous.
+
+### The suite
+
+One ztest app, `tests/textformat/`, shaped like `zephlet/tests/shell_macros/`: `CMakeLists.txt` with
+`set(NANOPB_OPTIONS "--c-style")` + `zephyr_nanopb_sources`, a `prj.conf` (`CONFIG_ZTEST`,
+`CONFIG_NANOPB`, `CONFIG_NANOPB_TEXTFORMAT`, `CONFIG_CBPRINTF_COMPLETE`, `CONFIG_CBPRINTF_FP_SUPPORT`,
+`CONFIG_CBPRINTF_FULL_INTEGRAL`), and a `testcase.yaml` with
+`platform_allow: mps2/an385, qemu_x86`.
+
+Suites: `macro` (table shape, `BUILD_ASSERT`s, both naming styles), `parse` (per-shape, nesting ≥ 2,
+oneof member switching, append semantics, merge semantics for singular submessages), `errors`
+(asserts `{code, offset, field}` for unknown field, missing colon, unterminated brace/string/list,
+bad escape, lone surrogate, over-range integer, over-long string/bytes, repeated past `array_size`,
+depth overflow, trailing junk after `}`, `[` on a non-repeated field, and each unsupported shape),
+`print` (both modes × braces × skip-defaults), `roundtrip` (parse → print → parse with `memcmp`
+struct equality plus text equality in compact mode).
+
+Three `testcase.yaml` entries, so the width-dispatch claim in fact 12 is actually exercised rather
+than asserted:
+
+| entry | extra_configs | proves |
+|---|---|---|
+| `nanopb_textformat.core` | — | everything |
+| `nanopb_textformat.nofloat` | `CONFIG_NANOPB_TEXTFORMAT_FLOAT=n` | float fields degrade cleanly |
+| `nanopb_textformat.no64` | `CONFIG_NANOPB_WITHOUT_64BIT=y` | genuine 8-byte fields degrade cleanly (they do **not** narrow — see fact 12) |
+
+```
+$ cd ws && west twister -T ../tests -p mps2/an385 -p qemu_x86 --inline-logs
+```
+
+Note on the "C99" claim: `pb.h:210-213` defaults `PB_STATIC_ASSERT` to `_Static_assert`, so any TU
+including `pb.h` needs C11. The library is C99-compatible source compiled at C11, like nanopb.
+
+Real-shell confirmation of `SHELL_OPT_ARG_RAW` (fact 9) happens in the zephlet follow-up, through
+`Shell.exec_command()`.
+
+## Out of scope here (follow-up on zephlet#58)
+
+Replacing `ZLET_SHELL_PARSE_FIELD` / `ZLET_SHELL_PRINT_FIELD` with `pb_tf_parse` / `pb_tf_print`,
+re-registering the RPC commands as `SHELL_OPT_ARG_RAW` leaves, emitting one `PB_TF_DEFINE` line per
+request/response message from `generate_zephlet.py`, adding this repo to
+`ports_adapters_zbus/west.yml`, and retiring the "nothing walks a message's fields at runtime" claim
+in `zephlet_shell_macros.h:4-8` and ADR-0001.

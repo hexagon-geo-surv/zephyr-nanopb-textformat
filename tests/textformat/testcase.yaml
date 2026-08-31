@@ -1,0 +1,25 @@
+common:
+  tags: nanopb textformat
+  harness: ztest
+  timeout: 60
+  platform_allow:
+    - mps2/an385
+    - qemu_x86
+
+tests:
+  # Everything, in the configuration a real consumer would use.
+  nanopb_textformat.core: {}
+
+  # Float fields must degrade to PB_TF_ERR_NO_FLOAT, not break the build.
+  nanopb_textformat.nofloat:
+    extra_configs:
+      - CONFIG_NANOPB_TEXTFORMAT_FLOAT=n
+
+  # PB_WITHOUT_64BIT does NOT narrow storage -- the generator never sees the
+  # define, so int64_t members stay 8 bytes. What it does is make the codec
+  # refuse genuine 8-byte fields (pb_decode.c:452-453), so this entry proves
+  # they degrade cleanly. Actual width narrowing is covered by int_size:IS_32
+  # on fx_scalars.f_narrow32, which applies in every config.
+  nanopb_textformat.no64:
+    extra_configs:
+      - CONFIG_NANOPB_WITHOUT_64BIT=y
