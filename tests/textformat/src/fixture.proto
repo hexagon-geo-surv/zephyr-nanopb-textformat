@@ -84,3 +84,17 @@ message fx_shapes {
     fx_inner c_msg = 11;
   }
 }
+
+// A oneof under nanopb's anonymous_oneof option. The union is emitted without a
+// name, so the FIELDLIST row's tuple becomes (pick, p_num, p_num) instead of
+// (pick, p_num, pick.p_num) -- but PB_TF_DEFINE reads only the first two
+// elements, and <type>_<union>_<field>_MSGTYPE is emitted the same either way
+// (nanopb_generator.py:1519-1526). So this must work identically, including for
+// a submessage member.
+message fx_anon {
+  uint32 keep = 1;
+  oneof pick {
+    uint32 p_num = 2;
+    fx_inner p_msg = 3;
+  }
+}

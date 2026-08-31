@@ -153,6 +153,14 @@ no re-verification during milestone 0.
     or directory`. Note west leaves a de-allowlisted project on disk; `rip modules/hal/cmsis` after
     changing the list.
 
+17. **`anonymous_oneof` needs nothing.** With nanopb's `anonymous_oneof:true` the union is emitted
+    without a name and the FIELDLIST row's tuple loses its prefix --
+    `(pick,p_num,p_num)` instead of `(pick,p_num,pick.p_num)` (`nanopb_generator.py:938-948`).
+    `PB_TF_DEFINE` reads only elements 1 and 2 via `PB_ONEOF_NAME(UNION/MEMBER, ...)`, and the
+    `<type>_<union>_<field>_MSGTYPE` symbol is emitted identically either way
+    (`nanopb_generator.py:1519-1526`) -- only `PB_ONEOF_NAME(FULL, ...)`, which nanopb itself uses
+    for `offsetof`, differs. So both forms work unchanged, submessage members included.
+
 ## The dialect
 
 Supported — all valid text format:
@@ -181,7 +189,10 @@ Out of scope — each a strict narrowing except the last:
   but nanopb generates **no value list**, `enum_to_string` is **one-way**, and under `--c-style` the
   type token is `mode_t` while the name function is `mode_name` and the bounds are
   `_MODE_MIN`/`_MODE_MAX` (`nanopb_generator.py:465-504`) — the preprocessor can neither uppercase
-  nor strip `_t`, so none of those are derivable from the row. Names would cost a registration line
+  nor strip `_t`, so none of those are derivable from the row. Under `--c-style` the generator
+  also prepends the enum's own name to every value (`nanopb_generator.py:499`), so an idiomatically
+  prefixed `FX_MODE_FAST` is emitted as `FX_MODE_FX_MODE_FAST` -- one more token shape the
+  preprocessor cannot derive from a row. Names would cost a registration line
   per enum type plus the strings in flash. If revisited, the shape is a `pb_tf_enum_t` referenced
   from the row exactly like `sub`, so nothing here forecloses it.
 - `\U000XXXXX` escapes and `\u` surrogate pairs — a lone surrogate is rejected rather than emitted

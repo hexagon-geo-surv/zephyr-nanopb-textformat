@@ -13,6 +13,35 @@
 /** Submessage nesting limit, from Kconfig. */
 #define PB_TF_MAX_DEPTH CONFIG_NANOPB_TEXTFORMAT_MAX_DEPTH
 
+/*
+ * Widest integer this build can hold, mirroring pb_decode.c:52-58.
+ *
+ * nanopb defines pb_int64_t/pb_uint64_t privately inside pb_decode.c rather
+ * than in pb.h, so they cannot be reused from here -- hence our own aliases
+ * under the same rule. Note what PB_WITHOUT_64BIT does and does not do: it
+ * does NOT narrow a generated struct member (the generator never sees the
+ * define, so an int64 field stays int64_t and 8 bytes wide). It narrows only
+ * the codec's accumulator, which is why nanopb then rejects a genuine 8-byte
+ * field at runtime with "invalid data_size" (pb_decode.c:452-453). Real width
+ * narrowing comes from nanopb's int_size option instead.
+ */
+#ifdef PB_WITHOUT_64BIT
+#define pb_tf_uint64_t   uint32_t
+#define pb_tf_int64_t    int32_t
+#define PB_TF_UINT64_MAX UINT32_MAX
+#define PB_TF_INT64_MAX  INT32_MAX
+#define PB_TF_INT64_MIN  INT32_MIN
+#else
+#define pb_tf_uint64_t   uint64_t
+#define pb_tf_int64_t    int64_t
+#define PB_TF_UINT64_MAX UINT64_MAX
+#define PB_TF_INT64_MAX  INT64_MAX
+#define PB_TF_INT64_MIN  INT64_MIN
+#endif
+
+/** True for the two submessage vtypes, which take an optional colon. */
+bool pb_tf_vtype_is_msg(uint8_t vtype);
+
 /**
  * Look a field up by name.
  *

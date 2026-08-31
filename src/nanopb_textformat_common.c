@@ -28,6 +28,11 @@ const pb_tf_field_t *pb_tf_field_find(const pb_tf_msg_t *tf, const char *name, s
 	return NULL;
 }
 
+bool pb_tf_vtype_is_msg(uint8_t vtype)
+{
+	return (vtype == PB_TF_VT_MESSAGE) || (vtype == PB_TF_VT_MSG_W_CB);
+}
+
 bool pb_tf_shape_supported(const pb_tf_field_t *f)
 {
 	if (PB_TF_AT(f->rules) != PB_TF_AT_STATIC) {

@@ -15,3 +15,6 @@ fx_shapes.rep_string      max_count:2, max_size:8
 # fixed_count -> FIXARRAY htype, which the library rejects at runtime.
 fx_shapes.fixed_scalar    max_count:2, fixed_count:true
 fx_shapes.c_str           max_size:8
+
+# Anonymous union: members are reached directly, without the .pick prefix.
+fx_anon.pick              anonymous_oneof:true
