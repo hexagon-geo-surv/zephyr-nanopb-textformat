@@ -1520,3 +1520,423 @@ ZTEST(pb_tf_text, test_string_in_submessage)
 	zassert_str_equal(m.rep_string[0], "x");
 	zassert_equal(m.sing_msg.a, 1);
 }
+
+/*
+ * ===========================================================================
+ * Milestone 5: the printer, and round-trip.
+ * ===========================================================================
+ */
+
+ZTEST_SUITE(pb_tf_print, NULL, NULL, NULL, NULL, NULL);
+
+/*
+ * Print into a local array and yield it. Note the parameter is not called `buf`:
+ * a macro parameter is substituted even after a '.', so `.buf = (buf)` would
+ * rewrite the designated initialiser itself.
+ */
+#define PRINT_INTO(dst, tf, msg, flags)                                                            \
+	({                                                                                         \
+		pb_tf_buf_t _b = {.buf = (dst), .size = sizeof(dst)};                              \
+		pb_tf_err_t _e = pb_tf_print((tf), (msg), pb_tf_out_buf, &_b, (flags));            \
+		zassert_equal(_e, PB_TF_OK, "print: %s", pb_tf_strerror(_e));                      \
+		zassert_false(_b.overflow, "buffer too small for the test");                       \
+		(dst);                                                                             \
+	})
+
+ZTEST(pb_tf_print, test_compact_scalars)
+{
+	fx_shapes_t m;
+	char out[128];
+
+	zassert_equal(pb_tf_parse(&fx_shapes_t_tf, &m, "plain_scalar: 1 opt_scalar: 2", 0U, NULL),
+		      PB_TF_OK);
+
+	/* Print-all is the default, so rep_string/fixed_scalar just have nothing. */
+	zassert_str_equal(PRINT_INTO(out, &fx_shapes_t_tf, &m, PB_TF_COMPACT),
+			  "plain_scalar: 1, opt_scalar: 2");
+}
+
+ZTEST(pb_tf_print, test_multiline_is_the_default)
+{
+	fx_shapes_t m;
+	char out[128];
+
+	zassert_equal(pb_tf_parse(&fx_shapes_t_tf, &m, "plain_scalar: 1 opt_scalar: 2", 0U, NULL),
+		      PB_TF_OK);
+
+	zassert_str_equal(PRINT_INTO(out, &fx_shapes_t_tf, &m, PB_TF_MULTILINE),
+			  "plain_scalar: 1\nopt_scalar: 2\n");
+}
+
+/* Compact output carries no braces by default, so it is valid standalone. */
+ZTEST(pb_tf_print, test_braces_are_opt_in)
+{
+	fx_shapes_t m;
+	char out[128];
+
+	zassert_equal(pb_tf_parse(&fx_shapes_t_tf, &m, "plain_scalar: 7", 0U, NULL), PB_TF_OK);
+
+	zassert_str_equal(PRINT_INTO(out, &fx_shapes_t_tf, &m, PB_TF_COMPACT), "plain_scalar: 7");
+	zassert_str_equal(PRINT_INTO(out, &fx_shapes_t_tf, &m, PB_TF_COMPACT | PB_TF_BRACES),
+			  "{plain_scalar: 7}");
+	zassert_str_equal(PRINT_INTO(out, &fx_shapes_t_tf, &m, PB_TF_MULTILINE | PB_TF_BRACES),
+			  "{\n  plain_scalar: 7\n}\n");
+}
+
+/* An absent optional prints nothing; a present zero still prints. */
+ZTEST(pb_tf_print, test_presence_governs_optional)
+{
+	fx_shapes_t m;
+	char out[128];
+
+	zassert_equal(pb_tf_parse(&fx_shapes_t_tf, &m, "plain_scalar: 0", 0U, NULL), PB_TF_OK);
+	zassert_str_equal(PRINT_INTO(out, &fx_shapes_t_tf, &m, PB_TF_COMPACT), "plain_scalar: 0");
+
+	zassert_equal(pb_tf_parse(&fx_shapes_t_tf, &m, "opt_scalar: 0", 0U, NULL), PB_TF_OK);
+	zassert_str_equal(PRINT_INTO(out, &fx_shapes_t_tf, &m, PB_TF_COMPACT),
+			  "plain_scalar: 0, opt_scalar: 0");
+}
+
+ZTEST(pb_tf_print, test_skip_defaults)
+{
+	fx_shapes_t m;
+	char out[128];
+
+	zassert_equal(pb_tf_parse(&fx_shapes_t_tf, &m, "plain_scalar: 0 opt_scalar: 0", 0U, NULL),
+		      PB_TF_OK);
+
+	/* Print-all keeps the implicit-presence zero; SKIP_DEFAULTS drops it. */
+	zassert_str_equal(PRINT_INTO(out, &fx_shapes_t_tf, &m, PB_TF_COMPACT),
+			  "plain_scalar: 0, opt_scalar: 0");
+	zassert_str_equal(PRINT_INTO(out, &fx_shapes_t_tf, &m,
+				     PB_TF_COMPACT | PB_TF_SKIP_DEFAULTS),
+			  "opt_scalar: 0", "an explicitly-present zero is not a default");
+}
+
+/* Repeated fields print as repetition, which is what protoc emits. */
+ZTEST(pb_tf_print, test_repeated_prints_as_repetition)
+{
+	fx_shapes_t m;
+	char out[128];
+
+	zassert_equal(pb_tf_parse(&fx_shapes_t_tf, &m, "rep_scalar: [1,2,3]", 0U, NULL), PB_TF_OK);
+
+	zassert_str_equal(PRINT_INTO(out, &fx_shapes_t_tf, &m, PB_TF_COMPACT),
+			  "plain_scalar: 0, rep_scalar: 1, rep_scalar: 2, rep_scalar: 3");
+	zassert_str_equal(PRINT_INTO(out, &fx_shapes_t_tf, &m,
+				     PB_TF_MULTILINE | PB_TF_SKIP_DEFAULTS),
+			  "rep_scalar: 1\nrep_scalar: 2\nrep_scalar: 3\n");
+}
+
+ZTEST(pb_tf_print, test_submessage_nesting)
+{
+	fx_shapes_t m;
+	char out[192];
+
+	zassert_equal(pb_tf_parse(&fx_shapes_t_tf, &m, "sing_msg { a: 1, b: -2 }", 0U, NULL),
+		      PB_TF_OK);
+
+	zassert_str_equal(PRINT_INTO(out, &fx_shapes_t_tf, &m,
+				     PB_TF_COMPACT | PB_TF_SKIP_DEFAULTS),
+			  "sing_msg {a: 1, b: -2 }");
+	zassert_str_equal(PRINT_INTO(out, &fx_shapes_t_tf, &m,
+				     PB_TF_MULTILINE | PB_TF_SKIP_DEFAULTS),
+			  "sing_msg {\n  a: 1\n  b: -2\n}\n");
+}
+
+ZTEST(pb_tf_print, test_two_levels_indent)
+{
+	fx_deep1_t m;
+	char out[192];
+
+	if (CONFIG_NANOPB_TEXTFORMAT_MAX_DEPTH < 2) {
+		ztest_test_skip();
+	}
+
+	zassert_equal(pb_tf_parse(&fx_deep1_t_tf, &m, "d2 { d3 { v: 9 } }", 0U, NULL), PB_TF_OK);
+
+	zassert_str_equal(PRINT_INTO(out, &fx_deep1_t_tf, &m, PB_TF_MULTILINE),
+			  "d2 {\n  d3 {\n    v: 9\n  }\n}\n");
+}
+
+ZTEST(pb_tf_print, test_bool_is_canonical)
+{
+	fx_scalars_t m;
+	char out[256];
+
+	/* Parsed as 't', printed as "true". */
+	zassert_equal(pb_tf_parse(&fx_scalars_t_tf, &m, "f_bool: t", 0U, NULL), PB_TF_OK);
+	zassert_not_null(strstr(PRINT_INTO(out, &fx_scalars_t_tf, &m,
+					   PB_TF_COMPACT | PB_TF_SKIP_DEFAULTS),
+				"f_bool: true"));
+}
+
+/*
+ * Escapes on output are always three octal digits. A \xHH escape would be
+ * ambiguous before a hex digit: "\x0" then 'a' reads back as one byte 0x0A.
+ */
+ZTEST(pb_tf_print, test_escapes_are_unambiguous)
+{
+	fx_scalars_t m;
+	char out[256];
+	const char *s;
+
+	zassert_equal(pb_tf_parse(&fx_scalars_t_tf, &m, "f_bytes: \"\\x0a\" ", 0U, NULL),
+		      PB_TF_OK);
+	s = PRINT_INTO(out, &fx_scalars_t_tf, &m, PB_TF_COMPACT | PB_TF_SKIP_DEFAULTS);
+	zassert_not_null(strstr(s, "f_bytes: \"\\012\""), "got %s", s);
+
+	/* A byte needing an escape immediately before a digit still round-trips. */
+	zassert_equal(pb_tf_parse(&fx_scalars_t_tf, &m, "f_bytes: \"\\x0a\\x31\"", 0U, NULL),
+		      PB_TF_OK);
+	s = PRINT_INTO(out, &fx_scalars_t_tf, &m, PB_TF_COMPACT | PB_TF_SKIP_DEFAULTS);
+	zassert_not_null(strstr(s, "f_bytes: \"\\0121\""), "got %s", s);
+
+	/* Backslash and the quote character are escaped; the other quote is not. */
+	zassert_equal(pb_tf_parse(&fx_scalars_t_tf, &m, "f_string: \"a\\\\b\\\"c'd\"", 0U, NULL),
+		      PB_TF_OK);
+	s = PRINT_INTO(out, &fx_scalars_t_tf, &m, PB_TF_COMPACT | PB_TF_SKIP_DEFAULTS);
+	zassert_not_null(strstr(s, "f_string: \"a\\\\b\\\"c'd\""), "got %s", s);
+}
+
+/* Output is pure ASCII, so a UTF-8 payload survives without encoding logic. */
+ZTEST(pb_tf_print, test_utf8_payload_is_escaped)
+{
+	fx_scalars_t m;
+	char out[256];
+	const char *s;
+
+	zassert_equal(pb_tf_parse(&fx_scalars_t_tf, &m, "f_string: \"\\u20ac\"", 0U, NULL),
+		      PB_TF_OK);
+	s = PRINT_INTO(out, &fx_scalars_t_tf, &m, PB_TF_COMPACT | PB_TF_SKIP_DEFAULTS);
+	zassert_not_null(strstr(s, "f_string: \"\\342\\202\\254\""), "got %s", s);
+}
+
+ZTEST(pb_tf_print, test_out_buf_overflow_is_reported)
+{
+	fx_shapes_t m;
+	char tiny[8];
+	pb_tf_buf_t b = {.buf = tiny, .size = sizeof(tiny)};
+
+	zassert_equal(pb_tf_parse(&fx_shapes_t_tf, &m, "plain_scalar: 123456789", 0U, NULL),
+		      PB_TF_OK);
+
+	/* Truncation is reported on the sink, not as a print error. */
+	zassert_equal(pb_tf_print(&fx_shapes_t_tf, &m, pb_tf_out_buf, &b, PB_TF_COMPACT),
+		      PB_TF_OK);
+	zassert_true(b.overflow);
+	zassert_true(strlen(tiny) < sizeof(tiny));
+}
+
+ZTEST(pb_tf_print, test_null_arguments)
+{
+	/* Zeroed because its address is taken while the call is expected to
+	 * reject the arguments and never read it. */
+	fx_shapes_t m = {0};
+	char out[32];
+	pb_tf_buf_t b = {.buf = out, .size = sizeof(out)};
+
+	zassert_equal(pb_tf_print(NULL, &m, pb_tf_out_buf, &b, 0U), PB_TF_ERR_INTERNAL);
+	zassert_equal(pb_tf_print(&fx_shapes_t_tf, NULL, pb_tf_out_buf, &b, 0U),
+		      PB_TF_ERR_INTERNAL);
+	zassert_equal(pb_tf_print(&fx_shapes_t_tf, &m, NULL, &b, 0U), PB_TF_ERR_INTERNAL);
+}
+
+/*
+ * An empty message prints nothing at all, braces aside -- and that is exactly
+ * the case pb_tf_out_buf() alone cannot terminate, since it terminates as it
+ * writes and here it is never called. pb_tf_print_buf() exists for this.
+ */
+ZTEST(pb_tf_print, test_empty_message)
+{
+	fx_empty_t m;
+	char out[32];
+
+	zassert_equal(pb_tf_parse(&fx_empty_t_tf, &m, "", 0U, NULL), PB_TF_OK);
+
+	(void)memset(out, 'X', sizeof(out));
+	zassert_equal(pb_tf_print_buf(&fx_empty_t_tf, &m, out, sizeof(out), PB_TF_COMPACT),
+		      PB_TF_OK);
+	zassert_str_equal(out, "", "a message that prints nothing must still terminate");
+
+	(void)memset(out, 'X', sizeof(out));
+	zassert_equal(pb_tf_print_buf(&fx_empty_t_tf, &m, out, sizeof(out),
+				      PB_TF_COMPACT | PB_TF_BRACES),
+		      PB_TF_OK);
+	zassert_str_equal(out, "{}");
+}
+
+/* The same trap via SKIP_DEFAULTS: every field skipped, so nothing is written. */
+ZTEST(pb_tf_print, test_all_defaults_skipped_still_terminates)
+{
+	fx_shapes_t m;
+	char out[32];
+
+	zassert_equal(pb_tf_parse(&fx_shapes_t_tf, &m, "", 0U, NULL), PB_TF_OK);
+
+	(void)memset(out, 'X', sizeof(out));
+	zassert_equal(pb_tf_print_buf(&fx_shapes_t_tf, &m, out, sizeof(out),
+				      PB_TF_COMPACT | PB_TF_SKIP_DEFAULTS),
+		      PB_TF_OK);
+	zassert_str_equal(out, "");
+}
+
+/* Truncation comes back as an error rather than a flag to remember to check. */
+ZTEST(pb_tf_print, test_print_buf_reports_truncation)
+{
+	fx_shapes_t m;
+	char tiny[8];
+
+	zassert_equal(pb_tf_parse(&fx_shapes_t_tf, &m, "plain_scalar: 123456789", 0U, NULL),
+		      PB_TF_OK);
+
+	zassert_equal(pb_tf_print_buf(&fx_shapes_t_tf, &m, tiny, sizeof(tiny), PB_TF_COMPACT),
+		      PB_TF_ERR_NO_SPACE);
+	zassert_true(strlen(tiny) < sizeof(tiny), "must stay terminated when truncated");
+
+	/* Degenerate sizes are rejected rather than writing anything. */
+	zassert_equal(pb_tf_print_buf(&fx_shapes_t_tf, &m, tiny, 0U, PB_TF_COMPACT),
+		      PB_TF_ERR_INTERNAL);
+	zassert_equal(pb_tf_print_buf(&fx_shapes_t_tf, &m, NULL, 8U, PB_TF_COMPACT),
+		      PB_TF_ERR_INTERNAL);
+}
+
+/*
+ * ===========================================================================
+ * Round-trip: parse -> print -> parse, compared as structs and as text.
+ *
+ * This is the strongest check the suite has. It exercises the vtype table in
+ * both directions at once: nanopb's runtime pb_type_t cannot tell a float from
+ * a fixed32, so a printer that had lost that distinction would emit a value the
+ * parser could not read back.
+ *
+ * fx_scalars is absent on purpose -- it carries float fields, whose parse side
+ * lands in milestone 6.
+ * ===========================================================================
+ */
+
+ZTEST_SUITE(pb_tf_roundtrip, NULL, NULL, NULL, NULL, NULL);
+
+/** parse(text) -> print -> parse -> assert both structs and both texts agree. */
+static void roundtrip(const pb_tf_msg_t *tf, void *a, void *b, size_t size, const char *text,
+		      unsigned int print_flags)
+{
+	char first[320];
+	char second[320];
+	pb_tf_buf_t fb = {.buf = first, .size = sizeof(first)};
+	pb_tf_buf_t sb = {.buf = second, .size = sizeof(second)};
+	pb_tf_status_t st;
+	pb_tf_err_t err;
+
+	err = pb_tf_parse(tf, a, text, 0U, &st);
+	zassert_equal(err, PB_TF_OK, "parse '%s': %s at %u", text, pb_tf_strerror(st.code),
+		      st.offset);
+
+	err = pb_tf_print(tf, a, pb_tf_out_buf, &fb, print_flags);
+	zassert_equal(err, PB_TF_OK, "print: %s", pb_tf_strerror(err));
+	zassert_false(fb.overflow, "first print truncated");
+
+	err = pb_tf_parse(tf, b, first, 0U, &st);
+	zassert_equal(err, PB_TF_OK, "reparse '%s': %s at %u", first, pb_tf_strerror(st.code),
+		      st.offset);
+
+	zassert_mem_equal(a, b, size, "structs differ after round-trip of '%s' via '%s'", text,
+			  first);
+
+	err = pb_tf_print(tf, b, pb_tf_out_buf, &sb, print_flags);
+	zassert_equal(err, PB_TF_OK, "reprint: %s", pb_tf_strerror(err));
+	zassert_str_equal(first, second, "printing is not idempotent");
+}
+
+/* Every flag combination, over the shapes from issue #58. */
+ZTEST(pb_tf_roundtrip, test_shapes_across_all_flags)
+{
+	static const char *const inputs[] = {
+		"plain_scalar: 42",
+		"opt_scalar: 0",
+		"rep_scalar: [1, 2, 3, 4]",
+		"rep_scalar: []",
+		"sing_msg { a: 1, b: -2 }",
+		"opt_msg { a: 9 }",
+		"rep_msg: [{a: 1}, {a: 2, b: 3}]",
+		"rep_string: [\"ab\", \"cd\"]",
+		"c_num: 77",
+		"c_str: \"pick\"",
+		"c_msg { a: 4 }",
+		"plain_scalar: 1 opt_scalar: 2 rep_scalar: [3] sing_msg { a: 4 } c_num: 5",
+		/* Bytes that need escaping, adjacent to digits. */
+		"rep_string: [\"\\012\\061\"]",
+	};
+	static const unsigned int flagsets[] = {
+		PB_TF_MULTILINE,
+		PB_TF_COMPACT,
+		PB_TF_MULTILINE | PB_TF_BRACES,
+		PB_TF_COMPACT | PB_TF_BRACES,
+		PB_TF_MULTILINE | PB_TF_SKIP_DEFAULTS,
+		PB_TF_COMPACT | PB_TF_SKIP_DEFAULTS,
+		PB_TF_COMPACT | PB_TF_BRACES | PB_TF_SKIP_DEFAULTS,
+		PB_TF_MULTILINE | PB_TF_BRACES | PB_TF_SKIP_DEFAULTS,
+	};
+
+	ARRAY_FOR_EACH(inputs, i) {
+		ARRAY_FOR_EACH(flagsets, f) {
+			fx_shapes_t a;
+			fx_shapes_t b;
+
+			roundtrip(&fx_shapes_t_tf, &a, &b, sizeof(a), inputs[i], flagsets[f]);
+		}
+	}
+}
+
+/* proto2 shapes: required, and a submessage behind a callback member. */
+ZTEST(pb_tf_roundtrip, test_proto2_shapes)
+{
+	static const char *const inputs[] = {
+		"req_num: 5",
+		"req_num: 1 opt_num: 2 rep_num: [3, 4]",
+		"req_num: 1 sub { v: 2 }",
+	};
+
+	ARRAY_FOR_EACH(inputs, i) {
+		fx_p2_t a;
+		fx_p2_t b;
+
+		roundtrip(&fx_p2_t_tf, &a, &b, sizeof(a), inputs[i], PB_TF_COMPACT);
+		roundtrip(&fx_p2_t_tf, &a, &b, sizeof(a), inputs[i], PB_TF_MULTILINE);
+	}
+}
+
+ZTEST(pb_tf_roundtrip, test_anonymous_oneof)
+{
+	fx_anon_t a;
+	fx_anon_t b;
+
+	roundtrip(&fx_anon_t_tf, &a, &b, sizeof(a), "keep: 1 p_num: 2", PB_TF_COMPACT);
+	roundtrip(&fx_anon_t_tf, &a, &b, sizeof(a), "keep: 1 p_msg { a: 3 }", PB_TF_MULTILINE);
+}
+
+/* The escaping rule has to survive every byte value, not just the easy ones. */
+ZTEST(pb_tf_roundtrip, test_every_byte_value)
+{
+	fx_p2_t unused_a;
+	fx_p2_t unused_b;
+	fx_shapes_t a;
+	fx_shapes_t b;
+	char text[64];
+	unsigned int v;
+
+	ARG_UNUSED(unused_a);
+	ARG_UNUSED(unused_b);
+
+	for (v = 0U; v < 256U; v++) {
+		/* Two copies, so an escape running into the next byte would show. */
+		(void)snprintf(text, sizeof(text), "rep_string: [\"\\%03o\\%03o\"]", v, v);
+
+		if (v == 0U) {
+			/* A NUL truncates a char-array string; nothing to compare. */
+			continue;
+		}
+
+		roundtrip(&fx_shapes_t_tf, &a, &b, sizeof(a), text, PB_TF_COMPACT);
+	}
+}

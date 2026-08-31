@@ -389,12 +389,36 @@ typedef struct { pb_tf_err_t code; uint16_t offset; const char *field; } pb_tf_s
 
 ### 3. Printer
 
-Walks the row table in declaration order, driving `pb_field_iter_next()` in lockstep (fact 7) rather
-than re-`find`ing. Skips absent `OPTIONAL`, unselected `ONEOF` members, and `EXTENSION` rows.
+Walks the row table in declaration order, iteratively, over the same kind of frame array as the
+parser (264 bytes flat on Cortex-M3, no recursion). Skips absent `OPTIONAL`, unselected `ONEOF`
+members, and `EXTENSION` rows.
 
-All formatting goes through `cbprintf(out, ctx, ...)`, so the writer is Zephyr's own `cbprintf_cb`
+All formatting goes through `cbvprintf(out, ctx, ...)`, so the writer is Zephyr's own `cbprintf_cb`
 and there is no temporary buffer in the print path. Float precision is explicit — `%.9g` for `float`,
 `%.17g` for `double` — because a wrong precision silently breaks round-trip.
+
+**Three deviations decided during milestone 5:**
+
+1. **No lockstep iteration.** Fact 7 established that row order matches `field_info` order, so the
+   printer *could* drive `pb_field_iter_next()` instead of re-`find`ing. That was the right call for
+   a recursive printer holding the iterator in a local; with a flat frame array it means one
+   `pb_field_iter_t` (~40 bytes) per open frame — 360 bytes at the default depth and 1.4 KB at the
+   maximum. `pb_field_iter_begin()` + `pb_field_iter_find()` per occurrence costs a short scan over
+   messages that have at most a couple of dozen fields, which is the cheaper side of that trade.
+   Fact 7 still holds; it is simply not worth spending RAM on here.
+
+2. **Repeated fields print as repetition, never as `[...]` lists.** `tags: 1 tags: 2` rather than
+   `tags: [1, 2]`. Both are valid text format and both re-parse, but repetition is what protoc emits
+   and it removes the list branch from the printer entirely.
+
+3. **Escapes on output are always three octal digits**, never `\xHH`. Fixed width is the point:
+   `\x0` followed by `a` reads back as the single byte `0x0A`, so a hex escape is ambiguous whenever
+   the next byte happens to be a hex digit. Three octal digits cannot run on. This also keeps output
+   pure ASCII, so a UTF-8 payload round-trips without the printer needing to understand encodings.
+
+Shapes the library cannot represent — `POINTER`, `CALLBACK`, `FIXARRAY` — are **skipped** rather than
+reported. Refusing to print a whole message because one field is a pointer is worse than an
+incomplete view, and the parser already rejects those fields on the way in. Documented, not silent.
 
 Flags: `PB_TF_MULTILINE` (default) / `PB_TF_COMPACT`, `PB_TF_BRACES` (off by default, so compact
 output is valid standalone text format), `PB_TF_SKIP_DEFAULTS`. **Print-all is the default** —
@@ -413,7 +437,17 @@ void        pb_tf_clear (const pb_tf_msg_t *tf, void *msg);
 const char *pb_tf_strerror(pb_tf_err_t code);
 /* bundled writer; ctx is pb_tf_buf_t { char *buf; size_t size, used; bool ovf; } */
 int         pb_tf_out_buf(int c, void *ctx);
+/* added in milestone 5 -- see below */
+pb_tf_err_t pb_tf_print_buf(const pb_tf_msg_t *tf, const void *msg, char *buf, size_t size,
+                            unsigned flags);
 ```
+
+`pb_tf_print_buf()` was not in the original API and exists because the streaming pair has a trap.
+`pb_tf_out_buf()` terminates the buffer *as it writes*, so a message that prints **nothing** — an
+empty message, or one whose every field is skipped under `PB_TF_SKIP_DEFAULTS` — never calls it and
+leaves the caller's buffer untouched and unterminated. The wrapper terminates up front and turns
+truncation into `PB_TF_ERR_NO_SPACE` instead of a flag the caller must remember to check. The
+streaming pair remains for output that should not be buffered at all.
 
 ## Milestones
 

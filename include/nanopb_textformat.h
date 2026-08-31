@@ -249,10 +249,36 @@ typedef struct pb_tf_buf pb_tf_buf_t;
 /**
  * @brief A @c cbprintf_cb that appends into a @ref pb_tf_buf.
  *
- * Always keeps the buffer NUL-terminated. Sets @c overflow instead of
- * writing past the end.
+ * Terminates the buffer as it writes, and sets @c overflow instead of writing
+ * past the end.
+ *
+ * Note the consequence of "as it writes": a message that prints nothing at all
+ * -- an empty message, or one whose every field is skipped under
+ * @c PB_TF_SKIP_DEFAULTS -- never calls this, so the buffer is left exactly as
+ * the caller supplied it. Either pre-terminate it, or use pb_tf_print_buf(),
+ * which handles that case.
  */
 int pb_tf_out_buf(int c, void *ctx);
+
+/**
+ * @brief Print into a caller-supplied buffer.
+ *
+ * Wraps pb_tf_print() and pb_tf_out_buf() for the common case, and differs from
+ * using them directly in two ways worth having: @p buf is NUL-terminated even
+ * when nothing is printed, and truncation comes back as @c PB_TF_ERR_NO_SPACE
+ * rather than a flag the caller has to remember to check.
+ *
+ * @param tf    descriptor from PB_TF_DEFINE
+ * @param msg   the struct to print
+ * @param buf   destination, always NUL-terminated on return
+ * @param size  bytes available in @p buf, including the terminator
+ * @param flags as for pb_tf_print()
+ *
+ * @return PB_TF_OK, @c PB_TF_ERR_NO_SPACE if the output was truncated, or the
+ *         first print error.
+ */
+pb_tf_err_t pb_tf_print_buf(const pb_tf_msg_t *tf, const void *msg, char *buf, size_t size,
+			    unsigned int flags);
 
 /*
  * ---------------------------------------------------------------------------
