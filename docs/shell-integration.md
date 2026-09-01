@@ -4,9 +4,9 @@ The motivating use case: a shell command that configures a running component by 
 configuration back.
 
 ```
-uart:~$ zlet ui_inst config {delay: 100, threshold: 500}
-uart:~$ zlet ui_inst config {tags: [1,2,3], inner: {a: 7}, inner: {a: 9}}
-uart:~$ zlet ui_inst get_config
+uart:~$ cfg set delay: 100, threshold: 500
+uart:~$ cfg set tags: [1,2,3], path: [{x: 7, y: 0}, {x: 9, y: 1}]
+uart:~$ cfg get
 delay: 100
 threshold: 500
 ```
@@ -99,8 +99,8 @@ you should just apply.
 Quotes are no longer stripped, so they become part of the message text:
 
 ```
-zlet ui_inst config '{delay: 100}'     # WRONG: the parser sees the ' characters
-zlet ui_inst config {delay: 100}       # right
+cfg set '{delay: 100}'     # WRONG: the parser sees the ' characters
+cfg set {delay: 100}       # right
 ```
 
 A leading `'` is not a valid start to a text-format message, so this fails with

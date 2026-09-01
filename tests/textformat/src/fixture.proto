@@ -67,7 +67,7 @@ message fx_scalars {
   int64 f_narrow32 = 20;
 }
 
-// The six shapes from zephlet#58, plus oneof.
+// Every repetition rule in one message, plus oneof.
 message fx_shapes {
   uint32 plain_scalar = 1;
   optional uint32 opt_scalar = 2;

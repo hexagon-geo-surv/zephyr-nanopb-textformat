@@ -14,8 +14,8 @@ project(nanopb_textformat_tests)
 list(APPEND CMAKE_MODULE_PATH ${ZEPHYR_BASE}/modules/nanopb)
 include(nanopb)
 
-# --c-style matches how zephlet generates its messages, so the tests exercise
-# the naming style the real consumer uses.
+# --c-style is one of the two naming styles nanopb can emit, and the one where
+# PB_TF_DEFINE's two arguments differ. fixture3.proto covers the other.
 set(NANOPB_OPTIONS "--c-style")
 # fixture.proto is proto3; fixture2.proto is proto2, for `required`, an
 # `extensions` range and the non-STATIC allocations proto3 cannot express.

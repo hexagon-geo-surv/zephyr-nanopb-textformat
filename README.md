@@ -6,9 +6,9 @@ Parses a subset of the text format directly into a nanopb-generated struct, and 
 back out. No heap, no scratch buffers, no recursion.
 
 ```
-uart:~$ zlet ui_inst config {delay: 100, threshold: 500}
-uart:~$ zlet ui_inst config {tags: [1,2,3], inner: {a: 7}, inner: {a: 9}}
-uart:~$ zlet ui_inst get_config
+uart:~$ cfg set delay: 100, threshold: 500
+uart:~$ cfg set tags: [1,2,3], path: [{x: 7, y: 0}, {x: 9, y: 1}]
+uart:~$ cfg get
 delay: 100
 threshold: 500
 ```

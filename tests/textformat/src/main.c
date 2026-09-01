@@ -19,7 +19,7 @@
 /* zephyr_nanopb_sources() adds only ${CMAKE_CURRENT_BINARY_DIR} to the include
  * path (zephyr/modules/nanopb/nanopb.cmake:35) while protoc mirrors the proto's
  * source-relative path into the output tree, so the generated header is at
- * <build>/src/fixture.pb.h. Same include as zephlet/tests/shell_macros. */
+ * <build>/src/fixture.pb.h. */
 #include "src/fixture.pb.h"
 #include "src/fixture2.pb.h"
 #include "src/fixture3.pb.h"
@@ -144,7 +144,7 @@ ZTEST(pb_tf_macro, test_rules_preserve_htype)
 /*
  * A proto3 singular message field is emitted as OPTIONAL with a has_ bit, so
  * `fx_inner sing_msg` and `optional fx_inner opt_msg` are the same shape --
- * exactly the claim in zephlet#58.
+ * byte-identical in the generated FIELDLIST.
  */
 ZTEST(pb_tf_macro, test_singular_and_optional_submessage_are_identical)
 {
@@ -1863,7 +1863,7 @@ static void roundtrip(const pb_tf_msg_t *tf, void *a, void *b, size_t size, cons
 	zassert_str_equal(first, second, "printing is not idempotent");
 }
 
-/* Every flag combination, over the shapes from issue #58. */
+/* Every flag combination, over every field shape. */
 ZTEST(pb_tf_roundtrip, test_shapes_across_all_flags)
 {
 	static const char *const inputs[] = {

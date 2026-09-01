@@ -31,8 +31,8 @@ message fx_p2 {
 }
 
 // POINTER and CALLBACK allocation. This library only handles STATIC, and must
-// say so at runtime rather than failing to build -- the fix for companion
-// issue #57.
+// say so at runtime rather than failing to build, so that one awkward field
+// cannot break a whole message's build.
 message fx_alloc {
   optional uint32 ok_num = 1;
   optional string ptr_str = 2;

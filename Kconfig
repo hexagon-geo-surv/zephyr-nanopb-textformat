@@ -11,7 +11,7 @@ config NANOPB_TEXTFORMAT
 
 	  Intended for hand-typed input, e.g. a Zephyr shell command:
 
-	    zlet ui_inst config {delay: 100, threshold: 500}
+	    cfg set delay: 100, threshold: 500
 
 	  Everything accepted is valid text format that protobuf's own parser
 	  accepts. See docs/dialect.md for the exact subset.

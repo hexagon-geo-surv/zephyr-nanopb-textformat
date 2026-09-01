@@ -2,19 +2,19 @@
 
 ## Context
 
-`zlet` (the zephlet shell frontend) supports exactly one field shape today: `STATIC, SINGULAR,
-<scalar>`. Everything else pastes into an undefined macro name and hard-fails the build
-(`frontends/shell/include/zephlet_shell_macros.h:30-31,139-141`). rodrigopex/zephlet#58 needs
-optional, repeated and submessage fields, and proves the macro-only design *cannot* recurse into a
-submessage's field list — the preprocessor can't re-enter a macro inside its own expansion.
+The usual way to accept a field value from a Zephyr shell command is a generated macro per field.
+That handles exactly one field shape — `STATIC, SINGULAR, <scalar>` — and everything else pastes into
+an undefined macro name and hard-fails the build. Optional, repeated and submessage fields need
+something a macro fundamentally cannot do: recurse into a submessage's field list, which the
+preprocessor refuses because it will not re-enter a macro inside its own expansion.
 
-Issue #58 proposes a custom path grammar (`items[0].a=7`, `tags=1,2,3`). We already have a standard
-for this, so this repo builds a **subset of the protobuf text format** instead:
+The obvious alternative is to invent a path grammar (`items[0].a=7`, `tags=1,2,3`). But a standard
+for this already exists, so this repo implements a **subset of the protobuf text format** instead:
 
 ```
-$ zlet ui_inst config {delay: 100, threshold: 500}
-$ zlet ui_inst config {tags: [1,2,3], inner: {a: 7}, inner: {a: 9}}
-$ zlet ui_inst get_config
+uart:~$ cfg set delay: 100, threshold: 500
+uart:~$ cfg set tags: [1,2,3], path: [{x: 7, y: 0}, {x: 9, y: 1}]
+uart:~$ cfg get
 delay: 100
 threshold: 500
 ```
@@ -23,8 +23,6 @@ Outcome: a **Zephyr module** that binds text format directly into a nanopb struc
 back out. Everything it accepts is valid text format that protobuf's own parser accepts, with one
 documented deviation (optional outer braces, off by default on output).
 
-zephlet consumes it in a follow-up; this repo does not touch zephlet.
-
 ## Decisions
 
 | | |
@@ -32,7 +30,7 @@ zephlet consumes it in a follow-up; this repo does not touch zephlet.
 | Name | Repo/dir **`zephyr-nanopb-textformat`**; module.yml `name: nanopb_textformat`; header `nanopb_textformat.h`; Kconfig `NANOPB_TEXTFORMAT` (verified free — zephyr's nanopb module owns only `NANOPB_{ENABLE_MALLOC, MAX_REQUIRED_FIELDS, NO_ERRMSG, BUFFER_ONLY, WITHOUT_64BIT, ENCODE_ARRAYS_UNPACKED, VALIDATE_UTF8}`); symbols stay `pb_tf_*` / `PB_TF_*`. |
 | Binding | **Direct into the struct** via nanopb's `pb_field_iter_t`. No intermediate wire buffer. |
 | Field names | **X-macro in this library** over nanopb's generated `<MSG>_FIELDLIST`. No codegen changes. |
-| Scope | **Parse + print.** zephlet's `get_config` needs print; round-trip is the strongest test. |
+| Scope | **Parse + print.** Reading a configuration back needs print; round-trip is the strongest test. |
 | Platform | **Zephyr-native.** Use Zephyr's utilities rather than reimplementing them. |
 | Shell input | **`SHELL_OPT_ARG_RAW`** — the handler gets the untouched remainder of `cmd_buff`. |
 | Printer | Engine is **`cbprintf`**; flags select multi-line/compact, braces, skip-defaults. Print-all default. |
@@ -50,13 +48,13 @@ zephlet consumes it in a follow-up; this repo does not touch zephlet.
   hand-rolled integer formatter and gives float formatting for free.
 - **`SHELL_OPT_ARG_RAW`** (`shell.h:61`) for command registration — see fact 9.
 - **`char2hex` / `hex2char` / `hex2bin` / `bin2hex`** (`sys/util.h:760-794`) for `\xHH` escapes and
-  bytes printing; the same helpers `zlet_shell_parse_hexbytes` already uses.
+  bytes printing.
 - **`strtoull` / `strtoll`** — present in every Zephyr libc including minimal
   (`lib/libc/minimal/source/stdlib/strtoull.c`), called with an explicit base after prefix sniffing.
 - **`IS_ENABLED()`**, **`BUILD_ASSERT`**, `ARRAY_SIZE`, `MIN`, `CLAMP`, and `util_macro.h`'s
   `UTIL_CAT` for the X-macro glue.
-- **`LOG_MODULE_REGISTER` + `Kconfig.template.log_config`**, as zephlet's own `Kconfig` ends.
-- **ztest + twister**, matching `zephlet/tests/shell_macros/` down to the `testcase.yaml` shape.
+- **`LOG_MODULE_REGISTER` + `Kconfig.template.log_config`**, the usual way a module's `Kconfig` ends.
+- **ztest + twister**, in the conventional in-tree test layout.
 
 ## Verified facts this design rests on
 
@@ -87,10 +85,11 @@ no re-verification during milestone 0.
    `PB_TF_DEFINE(FX_SHAPES, fx_shapes_t)`. `NANOPB_OPTIONS` is read per
    `zephyr_nanopb_sources()` call, which is what makes two styles in one build possible.
 
-   zephlet generates nanopb with **`--c-style`** (`tests/shell_macros/CMakeLists.txt:20`): FIELDLIST
-   is `TICK_CONFIG_FIELDLIST`, struct is `tick_config_t`, descriptor is `tick_config_t_msg`. So the
-   macro mirrors `PB_BIND(msgname, structname, width)`'s two-token form; keying the generated symbol
-   off `structname` makes it naming-style-agnostic.
+   Under nanopb's **`--c-style`**, a message `sensor_config` gives FIELDLIST
+   `SENSOR_CONFIG_FIELDLIST`, struct `sensor_config_t` and descriptor `sensor_config_t_msg` — three
+   different spellings of one name.
+   So the macro mirrors `PB_BIND(msgname, structname, width)`'s two-token form; keying the generated
+   symbol off `structname` makes it naming-style-agnostic.
 4. `pb.h:302-308` — **`PB_HTYPE_OPTIONAL == PB_HTYPE_SINGULAR == 0x10`** and
    **`PB_HTYPE_REPEATED == PB_HTYPE_FIXARRAY == 0x20`**. Indistinguishable at runtime, so the row
    carries the htype token from the macro; never read `PB_HTYPE(iter.type)`.
@@ -104,7 +103,7 @@ no re-verification during milestone 0.
    `FIXARRAY`: `pSize` points at `&iter->array_size`, *inside the iterator*.
 7. `pb_common.c:188-193` — `pb_field_iter_next()` **wraps around**; iteration is `do/while`.
    `pb_common.c:156-164` — `pb_field_iter_begin()` returns **false for an empty message**
-   (`field_count == 0`), which `Empty` in `zephlet.proto` is; check the return value.
+   (`field_count == 0`), which any marker message is; check the return value.
    Row order == `field_info` order (the generator sorts by tag and feeds the same FIELDLIST to
    `PB_BIND`), so the printer can drive `pb_field_iter_next()` in lockstep instead of re-`find`ing.
 8. Nothing in nanopb stores a field-name string — not `pb_msgdesc_t` (`pb.h:349-360`), not the
@@ -135,7 +134,8 @@ no re-verification during milestone 0.
    caps the line at 256 by default, and `CONFIG_SHELL_WILDCARD=y` rewrites `cmd_buff` so `*`/`?`
    inside values are a hazard.
 10. `nanopb_generator.py:643-648` — a **proto3 singular message field is `OPTIONAL` with a `has_`
-    bit**, confirming issue #58's "rows 4 and 5 are byte-identical". The `proto3_singular_msgs`
+    bit**, so a singular and an optional message field are byte-identical in the generated
+    FIELDLIST. The `proto3_singular_msgs`
     option flips it to `SINGULAR` with no `has_`; the row-carried htype handles both (fact 6).
 11. **`MSG_W_CB` needs nothing.** `nanopb_generator.py:789-793` puts `pb_callback_t cb_<name>;`
     *before* `bool has_<name>;`, and `size_offset` derives from `has_`, so the callback sits strictly
@@ -222,7 +222,7 @@ Out of scope — each a strict narrowing except the last:
   as invalid UTF-8, which also keeps `CONFIG_NANOPB_VALIDATE_UTF8` builds from failing on a struct
   this parser filled
 - `POINTER` / `CALLBACK` allocation, `FIXARRAY` (`fixed_count`), and `EXTENSION` fields → clear
-  **runtime** errors, not build breaks. This is the fix for companion issue #57.
+  **runtime** errors, not build breaks, so one awkward field cannot break a whole message's build.
 - proto2 `required` presence is **not** enforced — stated in the header, not silently ambiguous
 - **one extension:** optional outer braces on *input*. On output they are a separate off-by-default
   flag, so compact mode emits `a: 1, b: 2` — valid standalone text format that protoc will parse.
@@ -321,8 +321,7 @@ indirection fact 2 requires**:
   *expansion*. Only the `ONEOF` variant needs two levels, to expand `PB_ONEOF_NAME(MEMBER, fn)`
   before `#`. The two paths can disagree for such names; documented.
 
-Plus `PB_TF_FIELD_COUNT(FIELDLIST)`, mirroring zephlet's `ZLET_SHELL_FIELD_COUNT`, for
-`BUILD_ASSERT`s.
+Plus `PB_TF_FIELD_COUNT(FIELDLIST)`, for `BUILD_ASSERT`s on the generated table.
 
 ### 2. Parser
 
@@ -518,7 +517,7 @@ Each ends green under twister before the next starts.
 5. **Printer** over `cbprintf` + round-trip suite across every flag combination.
 6. **Float** behind `CONFIG_NANOPB_TEXTFORMAT_FLOAT`, plus the `=n` variant proving float fields degrade
    to a clean `ERR_UNSUPPORTED` rather than a build break.
-7. **Docs.** `README.md`, `docs/dialect.md`, and the zephlet integration sketch (including the
+7. **Docs.** `README.md`, `docs/dialect.md`, and a shell integration guide (including the
    `SHELL_OPT_ARG_RAW` registration and its three caveats).
 
 ## Verification
@@ -551,13 +550,13 @@ workspace that only ever builds. The trade-off is no usable history in the fetch
 that's ever needed.
 
 The module is injected into the test build via `EXTRA_ZEPHYR_MODULES` pointing at the repo root —
-exactly as `zephlet/tests/shell_macros/CMakeLists.txt:10` does. Note the two `zephyr` directories at
+which is the conventional way to test a module in its own repo. Note the two `zephyr` directories at
 different levels (`<repo>/zephyr/module.yml`, the module manifest, vs `<repo>/ws/zephyr/`, the
 fetched tree) are unrelated and unambiguous.
 
 ### The suite
 
-One ztest app, `tests/textformat/`, shaped like `zephlet/tests/shell_macros/`: `CMakeLists.txt` with
+One ztest app, `tests/textformat/`: `CMakeLists.txt` with
 `set(NANOPB_OPTIONS "--c-style")` + `zephyr_nanopb_sources`, a `prj.conf` (`CONFIG_ZTEST`,
 `CONFIG_NANOPB`, `CONFIG_NANOPB_TEXTFORMAT`, `CONFIG_CBPRINTF_COMPLETE`, `CONFIG_CBPRINTF_FP_SUPPORT`,
 `CONFIG_CBPRINTF_FULL_INTEGRAL`), and a `testcase.yaml` with
@@ -587,16 +586,16 @@ $ cd ws && west twister -T ../tests -p mps2/an385 -p qemu_x86 --inline-logs
 Note on the "C99" claim: `pb.h:210-213` defaults `PB_STATIC_ASSERT` to `_Static_assert`, so any TU
 including `pb.h` needs C11. The library is C99-compatible source compiled at C11, like nanopb.
 
-Real-shell confirmation of `SHELL_OPT_ARG_RAW` (fact 9) happens in the zephlet follow-up, through
-`Shell.exec_command()`.
+Real-shell confirmation of `SHELL_OPT_ARG_RAW` (fact 9) needs an actual shell, which arrived with
+the sample in milestone 7 — and promptly showed this document's reading of `mandatory` to be wrong.
 
-## Out of scope here (follow-up on zephlet#58)
+## Out of scope here
 
-Replacing `ZLET_SHELL_PARSE_FIELD` / `ZLET_SHELL_PRINT_FIELD` with `pb_tf_parse` / `pb_tf_print`,
-re-registering the RPC commands as `SHELL_OPT_ARG_RAW` leaves, emitting one `PB_TF_DEFINE` line per
-request/response message from `generate_zephlet.py`, adding this repo to
-`ports_adapters_zbus/west.yml`, and retiring the "nothing walks a message's fields at runtime" claim
-in `zephlet_shell_macros.h:4-8` and ADR-0001.
+Consuming the library from an application: replacing a per-field macro framework's parse and print
+macros with `pb_tf_parse` / `pb_tf_print`, re-registering commands as `SHELL_OPT_ARG_RAW` leaves,
+emitting one `PB_TF_DEFINE` line per message from whatever generates the message glue, and adding
+this repository to the consuming project's west manifest. `samples/textformat/` shows the shape of all
+of that in miniature.
 
 ---
 
@@ -622,5 +621,5 @@ reading; fact 9's line numbers re-verified and its wildcard caveat strengthened.
 One API addition beyond the plan: `pb_tf_print_buf()`, because `pb_tf_out_buf()` cannot terminate a
 buffer for a message that prints nothing.
 
-What remains is the follow-up on zephlet#58, listed under "Out of scope" above and deliberately not
-part of this repository.
+What remains is consumption by an application, listed under "Out of scope" above and deliberately
+not part of this repository. `samples/textformat/` shows the shape of it.
