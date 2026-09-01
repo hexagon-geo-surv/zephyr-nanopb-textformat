@@ -65,6 +65,22 @@ BUILD_ASSERT(PB_TF_FIELD_COUNT(FxDef_FIELDLIST) == 7);
 
 ZTEST_SUITE(pb_tf_macro, NULL, NULL, NULL, NULL, NULL);
 
+/* The version string and the numbers must not drift apart. */
+ZTEST(pb_tf_macro, test_version_macros)
+{
+	char expected[16];
+
+	(void)snprintf(expected, sizeof(expected), "%d.%d.%d", NANOPB_TEXTFORMAT_VERSION_MAJOR,
+		       NANOPB_TEXTFORMAT_VERSION_MINOR, NANOPB_TEXTFORMAT_VERSION_PATCH);
+	zassert_str_equal(NANOPB_TEXTFORMAT_VERSION_STRING, expected);
+
+	/* The encoded form is what users compare against. */
+	zassert_equal(NANOPB_TEXTFORMAT_VERSION,
+		      (NANOPB_TEXTFORMAT_VERSION_MAJOR << 16) |
+			      (NANOPB_TEXTFORMAT_VERSION_MINOR << 8) |
+			      NANOPB_TEXTFORMAT_VERSION_PATCH);
+}
+
 /* The descriptor must describe the same message nanopb does. */
 ZTEST(pb_tf_macro, test_descriptor_matches_nanopb)
 {

@@ -202,6 +202,60 @@ type distinction fails there and nowhere else. Extend it when adding a field sha
 - The test app is a **white-box** suite: it includes `src/nanopb_textformat_priv.h` for internal
   helpers, via a `target_include_directories` entry pointing at the library's `src/`.
 
+## Versioning
+
+This project follows **semantic versioning** (https://semver.org).
+
+`include/nanopb_textformat.h` holds the single source of truth
+(`NANOPB_TEXTFORMAT_VERSION_MAJOR` / `_MINOR` / `_PATCH` / `_STRING`, plus a `0xMMmmpp`
+`NANOPB_TEXTFORMAT_VERSION` for `#if` comparisons). A release bumps those macros **and** carries a
+matching annotated git tag `vX.Y.Z`; a test asserts the string and the numbers agree, so they cannot
+drift.
+
+While major is 0, the API may still change — but classify every change anyway, so the eventual 1.0 is
+a real promise rather than a guess.
+
+What counts as breaking here is not obvious, because three of this library's contracts are not
+function signatures:
+
+**MAJOR**
+
+- Removing, renaming or re-signaturing any of the six public functions or the two macros.
+- Changing the layout of `pb_tf_field_t` or `pb_tf_msg_t`. `PB_TF_DEFINE` bakes those structs into
+  *user* object files, so a layout change is an ABI break: everything must be recompiled, and a stale
+  object file will read garbage rather than fail to link.
+- **Narrowing the dialect** — input that used to parse now errors. `docs/dialect.md` is a contract,
+  and every narrowing is visible to users who had working messages.
+- Changing printed output so that text this library previously produced no longer reparses, or no
+  longer parses under `protoc`. Round-trip and pasteability are both promises.
+- Renumbering `enum pb_tf_err`. Append new codes at the end, never insert.
+- Changing the meaning of an existing error code, or making a Kconfig default break existing builds
+  (`FLOAT` from `y` to `n` would).
+
+**MINOR**
+
+- **Widening the dialect** — accepting more valid text format than before. This is the expected
+  growth direction: maps, enum-by-name and `\U` escapes are all deliberately absent, and all three
+  would be minor bumps.
+- A new public function, print flag, Kconfig option, or error code appended to the enum.
+- Changing a documented cost (a Kconfig default that moves the stack figure, say).
+
+**PATCH**
+
+- Fixing behaviour to match what `docs/dialect.md` already says.
+- `pb_tf_strerror()` wording. The strings are documented as human-readable, not as API — but keep them
+  **composable**, i.e. naming only the fault with no trailing "for field", or callers that append
+  context get "value out of range for field in field 'x'".
+- Docs, tests, comments.
+
+Two release obligations that are easy to forget:
+
+- If a new error code is appended, extend the bound in `test_strerror_covers_every_code`, which loops
+  `PB_TF_OK` to `PB_TF_ERR_INTERNAL` — an appended code past `INTERNAL` is otherwise untested.
+- The README quotes **exact measured byte counts** for flash, stack and the whole-image reference. Any
+  release that touches code must re-run `just size` / `just stack` and update them. Stale numbers in a
+  cost table are worse than no numbers.
+
 ## Conventions
 
 All public symbols are `pb_tf_*` / `PB_TF_*`; the Kconfig namespace is `NANOPB_TEXTFORMAT_*`; the

@@ -42,6 +42,32 @@ extern "C" {
 #endif
 
 /**
+ * @name Version
+ *
+ * Semantic versioning (https://semver.org). While the major version is 0 the
+ * API may still change; see the Versioning section of README.md for what counts
+ * as a breaking change here.
+ */
+/**@{*/
+#define NANOPB_TEXTFORMAT_VERSION_MAJOR 0
+#define NANOPB_TEXTFORMAT_VERSION_MINOR 1
+#define NANOPB_TEXTFORMAT_VERSION_PATCH 0
+
+#define NANOPB_TEXTFORMAT_VERSION_STRING "0.1.0"
+
+/**
+ * @brief Version as @c 0xMMmmpp, for comparison.
+ *
+ * @code
+ * #if NANOPB_TEXTFORMAT_VERSION >= 0x000200
+ * @endcode
+ */
+#define NANOPB_TEXTFORMAT_VERSION                                                                  \
+	(((NANOPB_TEXTFORMAT_VERSION_MAJOR) << 16) | ((NANOPB_TEXTFORMAT_VERSION_MINOR) << 8) |     \
+	 (NANOPB_TEXTFORMAT_VERSION_PATCH))
+/**@}*/
+
+/**
  * @brief Value type of a field.
  *
  * These mirror the ltype tokens in nanopb's generated @c FIELDLIST rows, and

@@ -43,9 +43,11 @@ manifest:
   projects:
     - name: zephyr-nanopb-textformat
       remote: rodrigopex
-      revision: main
+      revision: v0.1.0
       path: modules/lib/zephyr-nanopb-textformat
 ```
+
+Pin a tag rather than `main`, so a `west update` cannot move the library under you.
 
 `zephyr/module.yml` makes it a Zephyr module, so nothing further is needed in your CMake. Then:
 
@@ -363,6 +365,33 @@ kept as a record rather than as current documentation — read `README.md` and
 each decision that was revised during implementation is marked in place, with the measurement that
 forced it.
 
+## Versioning
+
+[Semantic versioning](https://semver.org). The current version is **0.1.0**.
+
+Major is still 0, which means the API may change — the library is complete and tested, but nobody
+outside this repository has used it yet, and the error strings were reworded as recently as the first
+release. Pin a tag.
+
+`include/nanopb_textformat.h` exposes the version if you need to compile against more than one:
+
+```c
+#if NANOPB_TEXTFORMAT_VERSION >= 0x000200   /* 0.2.0 */
+```
+
+Three of this library's contracts are not function signatures, and they are versioned as carefully as
+the API is:
+
+- **The dialect.** Accepting *more* valid text format is a minor bump; accepting *less* is a major
+  one, because it breaks messages that used to work. `docs/dialect.md` is the contract.
+- **Printed output.** A change that stops previously-printed text from reparsing — here or under
+  `protoc` — is a major bump.
+- **Descriptor layout.** `PB_TF_DEFINE` bakes `pb_tf_field_t` into *your* object files, so changing it
+  is an ABI break and a major bump.
+
+Maps, enum values by name, and `\U` escapes are deliberately absent today; adding any of them would
+be a minor bump, not a breaking one.
+
 ## License
 
-Apache-2.0.
+Apache-2.0. See [LICENSE](LICENSE).

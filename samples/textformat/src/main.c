@@ -258,7 +258,8 @@ SHELL_CMD_REGISTER(cfg, &sub_cfg, "Edit a nanopb struct as protobuf text format"
 
 int main(void)
 {
-	printk("\nnanopb_textformat sample -- edit a nanopb struct from the shell.\n\n"
+	printk("\nnanopb_textformat " NANOPB_TEXTFORMAT_VERSION_STRING
+	       " sample -- edit a nanopb struct from the shell.\n\n"
 	       "  cfg examples                              worked examples\n"
 	       "  cfg help                                  command reference\n"
 	       "  cfg set delay: 100, path: [{x: 1, y: 2}]  parse a message\n"
