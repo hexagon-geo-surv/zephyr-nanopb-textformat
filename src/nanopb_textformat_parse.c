@@ -951,7 +951,14 @@ static pb_tf_err_t pb_tf_write_float(struct pb_tf_parser *ps, const pb_tf_field_
 {
 	const char *start = ps->p;
 	bool special;
-	double v;
+	/*
+	 * Initialised only to satisfy -Wmaybe-uninitialised. pb_tf_scan_float()
+	 * writes through out on every path that returns PB_TF_OK and the error is
+	 * checked before v is read, but gcc cannot see that correlation across
+	 * the call at -Os, and Zephyr builds module sources with -Werror. The
+	 * store is dead in every real path; do not remove it.
+	 */
+	double v = 0.0;
 	pb_tf_err_t err = pb_tf_scan_float(ps, row, &v, &special);
 
 	if (err != PB_TF_OK) {

@@ -5,6 +5,17 @@ common:
   platform_allow:
     - mps2/an385
     - qemu_x86
+    # native_sim is the only target here that compiles against a *host* libc.
+    # Zephyr builds module sources at -std=c17, which sets __STRICT_ANSI__, and
+    # glibc then hides its POSIX-only declarations -- so a POSIX function the
+    # SDK's picolibc happens to declare anyway is an error here and nowhere
+    # else. v0.1.0 shipped exactly that bug (strnlen).
+    #
+    # Linux only, and both widths are listed on purpose: plain native_sim is
+    # 32-bit and needs gcc-multilib, which does not exist on aarch64, so an
+    # arm64 host can only run the /native/64 variant.
+    - native_sim
+    - native_sim/native/64
 
 tests:
   # Everything, in the configuration a real consumer would use.

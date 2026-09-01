@@ -2116,7 +2116,9 @@ ZTEST(pb_tf_float, test_print_precision_round_trips)
 {
 	static const char *const inputs[] = {
 		"f_float: 0.1",   "f_float: 1e-30", "f_float: 3.4e38",
-		"f_double: 0.1",  "f_double: 1e-300", "f_double: 1.7976931348623157e308",
+		/* 15 significant digits: within what cbprintf can emit. DBL_MAX
+		 * needs 17 and is covered separately, below. */
+		"f_double: 0.1",  "f_double: 1e-300", "f_double: 0.123456789012345",
 		"f_float: inf",   "f_float: -inf",
 	};
 
@@ -2144,6 +2146,57 @@ ZTEST(pb_tf_float, test_print_precision_round_trips)
 		/* Compared by value, since NaN never equals itself. */
 		zassert_equal(a.f_float, b.f_float, "float lost precision via '%s'", text);
 		zassert_equal(a.f_double, b.f_double, "double lost precision via '%s'", text);
+	}
+}
+
+/*
+ * Doubles round-trip to 16 significant digits, not the 17 that IEEE-754 needs in
+ * the worst case.
+ *
+ * The limit is Zephyr's, not this library's: cbprintf_complete.c caps floating
+ * point at 16 extracted digits (see its digit_count and the `decimals > 16`
+ * clamp), so a %.17g request cannot produce 17. Asking for %.17g is still right
+ * -- it is what the value deserves, and it becomes exact if cbprintf ever gains
+ * the digit -- but the promise has to be stated as 16.
+ *
+ * At DBL_MAX the 16-digit form rounds *up* past the maximum, so reparsing it
+ * overflows. glibc's strtod reports that as an infinity, which this library
+ * refuses (PB_TF_ERR_RANGE); picolibc's lands back on DBL_MAX and succeeds. Both
+ * are accepted here -- what must never happen is a silent infinity.
+ */
+ZTEST(pb_tf_float, test_double_precision_is_capped_at_16_digits)
+{
+	fx_scalars_t a;
+	fx_scalars_t b;
+	char text[320];
+	pb_tf_err_t err;
+
+	/* 15 digits: comfortably inside the cap, so exact. */
+	zassert_equal(pb_tf_parse(&fx_scalars_t_tf, &a, "f_double: 0.123456789012345", 0U, NULL),
+		      PB_TF_OK);
+	err = pb_tf_print_buf(&fx_scalars_t_tf, &a, text, sizeof(text),
+			      PB_TF_COMPACT | PB_TF_SKIP_DEFAULTS);
+	if (err == PB_TF_ERR_UNSUPPORTED) {
+		ztest_test_skip();
+	}
+	zassert_equal(err, PB_TF_OK, "%s", pb_tf_strerror(err));
+	zassert_equal(pb_tf_parse(&fx_scalars_t_tf, &b, text, 0U, NULL), PB_TF_OK);
+	zassert_equal(a.f_double, b.f_double, "15 digits must survive: '%s'", text);
+
+	/* DBL_MAX needs 17 and therefore does not. */
+	zassert_equal(pb_tf_parse(&fx_scalars_t_tf, &a, "f_double: 1.7976931348623157e308", 0U,
+				  NULL),
+		      PB_TF_OK);
+	err = pb_tf_print_buf(&fx_scalars_t_tf, &a, text, sizeof(text),
+			      PB_TF_COMPACT | PB_TF_SKIP_DEFAULTS);
+	zassert_equal(err, PB_TF_OK, "printing DBL_MAX must still succeed: %s",
+		      pb_tf_strerror(err));
+
+	err = pb_tf_parse(&fx_scalars_t_tf, &b, text, 0U, NULL);
+	zassert_true((err == PB_TF_OK) || (err == PB_TF_ERR_RANGE), "got %s for '%s'",
+		     pb_tf_strerror(err), text);
+	if (err == PB_TF_OK) {
+		zassert_true(isfinite(b.f_double), "a rounded DBL_MAX must not become inf");
 	}
 }
 

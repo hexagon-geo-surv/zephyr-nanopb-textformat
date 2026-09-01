@@ -159,6 +159,31 @@ static void pb_tf_quoted(struct pb_tf_printer *pr, const pb_byte_t *b, size_t le
 	pb_tf_put(pr, '"');
 }
 
+/**
+ * Length of @p s, stopping at @p n.
+ *
+ * Not strnlen(): that is POSIX-2008, not ISO C, so glibc hides it behind
+ * __STRICT_ANSI__ -- and Zephyr compiles module sources at -std=c17, which sets
+ * it. On a cross target the SDK's picolibc declares it anyway and on macOS Apple
+ * libc does too, so the omission only surfaces as an error on a glibc host,
+ * i.e. native_sim on Linux. An implicitly declared function is assumed to return
+ * int, so the length would have been truncated through int before widening back
+ * to size_t.
+ *
+ * Six lines here avoids both a _POSIX_C_SOURCE dance and any further libc
+ * variation.
+ */
+static size_t pb_tf_strnlen(const char *s, size_t n)
+{
+	size_t i = 0U;
+
+	while ((i < n) && (s[i] != '\0')) {
+		i++;
+	}
+
+	return i;
+}
+
 /** True for the vtypes whose C storage is signed. Mirrors the parser's table. */
 static bool pb_tf_print_is_signed(uint8_t vtype)
 {
@@ -260,6 +285,12 @@ static pb_tf_err_t pb_tf_print_scalar(struct pb_tf_printer *pr, const pb_tf_fiel
 		 * trips every float, and %.17g every double. Too few digits
 		 * silently loses a value that then fails to compare equal.
 		 *
+		 * Note a Zephyr limit that %.17g cannot escape: cbprintf caps
+		 * floating point at 16 extracted digits, so a double needing 17
+		 * -- DBL_MAX, for one -- does not round-trip exactly. Asking for
+		 * 17 is still correct, and becomes exact if cbprintf gains the
+		 * digit; see docs/dialect.md.
+		 *
 		 * The width decides which to use, not the vtype: with
 		 * PB_CONVERT_DOUBLE_FLOAT a proto double is stored as a C float,
 		 * and printing 17 digits of a float's worth of information would
@@ -278,7 +309,7 @@ static pb_tf_err_t pb_tf_print_scalar(struct pb_tf_printer *pr, const pb_tf_fiel
 #endif
 
 	case PB_TF_VT_STRING:
-		pb_tf_quoted(pr, (const pb_byte_t *)src, strnlen((const char *)src, data_size));
+		pb_tf_quoted(pr, (const pb_byte_t *)src, pb_tf_strnlen((const char *)src, data_size));
 		return PB_TF_OK;
 
 	case PB_TF_VT_BYTES: {

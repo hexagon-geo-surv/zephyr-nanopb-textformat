@@ -9,6 +9,11 @@
 # own choice, and a committed name breaks every clone that does not have it.
 .python-version
 
+# native_sim executes on the host, so a crashing run can drop a core file next
+# to the test sources.
+core
+core.*
+
 # Build artefacts
 build*/
 twister-out*/

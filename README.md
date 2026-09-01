@@ -43,7 +43,7 @@ manifest:
   projects:
     - name: zephyr-nanopb-textformat
       remote: rodrigopex
-      revision: v0.1.0
+      revision: v0.1.1
       path: modules/lib/zephyr-nanopb-textformat
 ```
 
@@ -169,7 +169,7 @@ turns an unsupported construct into an error rather than a silent misparse.
 | Submessages | `inner { a: 7 }` — the colon is optional, the braces are not |
 | Oneof | one member per union; switching clears the union first |
 | Strings, bytes | `"…"` / `'…'`, with `\xH[H]`, `\NNN` and `\uXXXX` escapes |
-| Floats | `1.0`, `-2.5e3`, `1f`, `inf`, `nan` |
+| Floats | `1.0`, `-2.5e3`, `1f`, `inf`, `nan` — doubles round-trip to 16 significant digits ([why](docs/dialect.md#floats)) |
 | Outer braces | optional on input — the one documented extension |
 
 **[docs/dialect.md](docs/dialect.md)** is the precise contract: what is in, what is out, and why.
@@ -188,8 +188,8 @@ All figures measured on `mps2/an385` (Cortex-M3) at `-Os`, reproducible with `ju
 
 | | |
 |---|---|
-| Library code | **5128 B** — parse 3289, print 1373, common 466 |
-| with `FLOAT=n` | **4562 B** (−566 B of library code) |
+| Library code | **5132 B** — parse, print and common combined |
+| with `FLOAT=n` | **4566 B** (−566 B of library code) |
 | Per message descriptor | `12 × (fields + 1) + 12` bytes, plus the field names as strings |
 
 The descriptor is `const`, so it lives in flash, not RAM. Two worked examples from the sample:
@@ -217,14 +217,18 @@ Your RAM cost is therefore only:
 Neither direction recurses. Submessages are walked with an explicit frame array, so cost is a
 compile-time constant rather than a function of the input:
 
-| | Stack |
-|---|---|
-| `pb_tf_parse()` | `132 + 20n` bytes, *n* = `MAX_DEPTH` → **296 B** at the default 8 |
-| `pb_tf_print()` | **264 B** |
-| deepest leaf helper | ~60 B on top of either |
+Both grow linearly with `CONFIG_NANOPB_TEXTFORMAT_MAX_DEPTH`, at 20 bytes per level for the parser
+and 16 for the printer, on top of a fixed frame. Measured:
 
-Budget **about 400 bytes** for a call into the library, and see [Tips](#tips) for what that means for
-your thread stacks — usually your own output buffer matters more than the library does.
+| `MAX_DEPTH` | `pb_tf_parse()` | `pb_tf_print()` |
+|---|---|---|
+| 1 | 160 B | 144 B |
+| **8 (default)** | **304 B** | **264 B** |
+| 32 (maximum) | 792 B | 648 B |
+
+Add ~60 B for the deepest leaf helper. Budget **about 400 bytes** for a call into the library at the
+default depth, and see [Tips](#tips) for what that means for your thread stacks — usually your own
+output buffer matters more than the library does.
 
 Being iterative is not a micro-optimisation. A recursive implementation measured **144 bytes per
 nesting level**: ~1.2 KB at the default depth and ~4.6 KB at the Kconfig maximum, against a
@@ -239,8 +243,8 @@ The sample — Zephyr, the shell, nanopb and this library — on `mps2/an385`:
 
 | | Flash | RAM |
 |---|---|---|
-| `FLOAT=y` (default) | 56 756 B | 11 712 B |
-| `FLOAT=n` | 48 572 B | 11 712 B |
+| `FLOAT=y` (default) | 56 772 B | 11 712 B |
+| `FLOAT=n` | 48 584 B | 11 712 B |
 
 Turning floats off saved 8.2 KB of flash here and **no RAM**, because what it removes is `strtod()`
 and cbprintf's floating-point formatting. Expect somewhere between 8 and 12 KB depending on how much
@@ -260,7 +264,7 @@ A budget that works:
 
 | | |
 |---|---|
-| Library call | ~400 B |
+| Library call | ~400 B at the default depth |
 | Your output buffer | `sizeof(buf)`, if it is a local |
 | `printk` / `shell_print` formatting | several hundred bytes |
 | Head-room | the rest |
@@ -367,7 +371,7 @@ forced it.
 
 ## Versioning
 
-[Semantic versioning](https://semver.org). The current version is **0.1.0**.
+[Semantic versioning](https://semver.org). The current version is **0.1.1**.
 
 Major is still 0, which means the API may change — the library is complete and tested, but nobody
 outside this repository has used it yet, and the error strings were reworded as recently as the first

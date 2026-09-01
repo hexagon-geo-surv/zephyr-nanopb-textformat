@@ -163,6 +163,14 @@ Printing uses `%.9g` for a 4-byte field and `%.17g` for an 8-byte one — the sh
 round-trip. The *width* decides, not the declared proto type, because `PB_CONVERT_DOUBLE_FLOAT`
 stores a proto `double` as a C `float`.
 
+**A `double` round-trips to 16 significant digits, not 17.** The limit is Zephyr's: its `cbprintf`
+caps floating-point conversion at 16 extracted digits, so a `%.17g` request cannot produce a 17th.
+Floats are unaffected — 9 digits is well inside the cap — and so is any `double` that needs 16 or
+fewer, which is every value you are likely to configure. A `double` that genuinely needs 17, such as
+`DBL_MAX`, prints as a 16-digit value that is very slightly different; reparsing it then either
+reports `PB_TF_ERR_RANGE` (glibc, whose `strtod` sees the rounded value overflow) or lands back on
+`DBL_MAX` (picolibc). It never silently becomes an infinity.
+
 ### Strings and bytes
 
 Capacities follow nanopb's own arithmetic, not the declared `max_size`:

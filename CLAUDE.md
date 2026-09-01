@@ -39,6 +39,10 @@ west build -d build-t -t run
 # The real gate: 4 configurations x 2 boards. Run this before every commit.
 west twister -T ../tests -p mps2/an385 -p qemu_x86 --inline-logs
 
+# And native_sim, which needs a Linux host -- `just test-native` runs it in
+# Docker. Do not skip it: it is the only target that compiles against a *host*
+# libc, and v0.1.0 shipped a bug that no cross target could catch. See below.
+
 # One configuration (core | nofloat | no64 | shallow)
 west twister -T ../tests -p qemu_x86 -s nanopb_textformat.no64
 
@@ -112,8 +116,10 @@ per nesting level, wanting ~4.6 KB at the Kconfig maximum depth against a `CONFI
 that defaults to 2048 — and the intended consumer is a shell command. It also keeps the library clear
 of MISRA C:2025 Rule 17.2.
 
-**Do not reintroduce recursion in either file.** Cost is now `132 + 20n` bytes for parse and a flat
-264 for print.
+**Do not reintroduce recursion in either file.** Both now grow linearly with `MAX_DEPTH` instead:
+20 bytes per level for parse and 16 for print, over a fixed frame. Measured at depth 1/8/32 that is
+160/304/792 for `pb_tf_parse` and 144/264/648 for `pb_tf_print` — note print is *not* flat, which an
+earlier version of this file claimed.
 
 The one subtlety recursion handled for free: a repeated submessage's element count must not include
 an element whose body failed halfway through. So the **commit** (`has_` bit, repeated count, or oneof
@@ -139,6 +145,9 @@ declared `max_size`, which tail padding can differ from.
   literal's shape is validated independently and `strtod`'s `endptr` must agree. Keep that check.
 - **Only the `inf`/`nan` words may produce a non-finite value.** Both `1e39` into a 4-byte field and
   `1e309` into an 8-byte one report `PB_TF_ERR_RANGE`.
+- **A `double` round-trips to 16 significant digits, not 17.** Zephyr's `cbprintf` caps floating point
+  at 16 extracted digits, so `%.17g` cannot emit a 17th. Do not "fix" this by widening the format;
+  do not assume `DBL_MAX` survives a round-trip. `docs/dialect.md` states the real promise.
 - `PB_WITHOUT_64BIT` does **not** narrow struct storage — the generator never sees it. It narrows the
   codec, so a genuine 8-byte field reports `PB_TF_ERR_UNSUPPORTED`. Real narrowing is `int_size`.
 - Shapes the library cannot represent (`POINTER`, `CALLBACK`, `FIXARRAY`, `EXTENSION`) are **runtime**
@@ -171,6 +180,25 @@ configured — keep them meaningful:
 | `nofloat` | `FLOAT=n` degrades cleanly in both directions |
 | `no64` | genuine 8-byte fields degrade cleanly (they do **not** narrow) |
 | `shallow` | `MAX_DEPTH=1` actually reaches `PB_TF_ERR_DEPTH` |
+
+### native_sim is not optional
+
+Zephyr compiles module sources at **`-std=c17`**, which sets `__STRICT_ANSI__`. On a cross target the
+SDK's picolibc declares its POSIX extras anyway, and Apple libc does too — so a POSIX-only function
+compiles cleanly on every platform this project's matrix used to cover, and is an **error** on glibc.
+`native_sim` on Linux is the only target that compiles against a host libc.
+
+v0.1.0 shipped `strnlen()` for exactly this reason and broke every consumer building for
+`native_sim`. Prefer a small local helper over a POSIX function, or over `_POSIX_C_SOURCE` juggling.
+
+Two further things that target taught, worth keeping in mind:
+
+- **twister turns warnings into errors**; a plain `west build` only warns. A clean `west build` is not
+  evidence.
+- Plain `native_sim` is **32-bit** and needs `gcc-multilib`, which does not exist on aarch64 — an
+  arm64 host can only run `native_sim/native/64`. Both are in `platform_allow`.
+- Running x86 under QEMU on Apple Silicon makes `cc1` segfault intermittently. That is emulation
+  noise, not a defect; retry, or use the arm64 path for a stable signal.
 
 Three fixtures, each load-bearing. Do not consolidate them:
 
