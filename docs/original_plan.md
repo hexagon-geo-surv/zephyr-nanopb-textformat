@@ -117,11 +117,19 @@ no re-verification during milestone 0.
    `shell_utils.c:112-134`. One finding came out stronger than written: `CONFIG_SHELL_WILDCARD` is
    `default y if !SHELL_MINIMAL`, so the wildcard hazard is the **default state**, not an opt-in.)*
 
+   *(Corrected again in milestone 7, this time by running it rather than reading it: the note that
+   `args_left = mandatory - 1` "so the raw string arrives as argv[1]" was a wrong inference.
+   `mandatory` counts the command word plus any **tokenized** mandatory arguments, and the raw string
+   lands at `argv[mandatory]` — so `mandatory = 1` puts it at `argv[1]`, and `mandatory = 2` tokenizes
+   one more word and puts the raw string at `argv[2]`. The raw argument is also optional, so `argc`
+   can be 1. Zephyr's `tests/subsys/shell/shell/src/main.c` asserts both shapes. The sample built in
+   this milestone failed on its first command, which is how this surfaced.)*
+
    `CONFIG_SHELL_ARGC_MAX` defaults to 20 and the shell **silently drops**
    everything past the cap (~8 text-format fields), and `make_argv` collapses whitespace runs — so
    joining `argv` silently corrupts both long messages and string values.
-   `SHELL_OPT_ARG_RAW` on a leaf command makes `active_cmd_prepare` (`shell.c:585-590`) stop
-   tokenising, and `shell.c:800-806` hands the handler the **untouched remainder** of `cmd_buff`:
+   `SHELL_OPT_ARG_RAW` on a leaf command makes `active_cmd_prepare` stop
+   tokenising, and the shell hands the handler the **untouched remainder** of `cmd_buff`:
    no quote stripping, no backslash processing, no collapse, no ARGC cap. Document three caveats:
    don't wrap the argument in `'…'` (quotes are no longer stripped), `CONFIG_SHELL_CMD_BUFF_SIZE`
    caps the line at 256 by default, and `CONFIG_SHELL_WILDCARD=y` rewrites `cmd_buff` so `*`/`?`

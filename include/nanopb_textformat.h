@@ -231,7 +231,20 @@ pb_tf_err_t pb_tf_print(const pb_tf_msg_t *tf, const void *msg, cbprintf_cb out,
 /** @brief Zero a message, the way pb_tf_parse() does by default. */
 void pb_tf_clear(const pb_tf_msg_t *tf, void *msg);
 
-/** @brief Human-readable text for an error code. Never NULL. */
+/**
+ * @brief Human-readable text for an error code. Never NULL.
+ *
+ * The strings name only the fault, so a caller can append context without
+ * repeating a word:
+ *
+ * @code
+ * printk("at offset %u: %s", st.offset, pb_tf_strerror(err));
+ * if (st.field != NULL) {
+ *         printk(" in field '%s'", st.field);
+ * }
+ * // -> "at offset 14: value out of range in field 'threshold'"
+ * @endcode
+ */
 const char *pb_tf_strerror(pb_tf_err_t code);
 
 /** @brief Context for pb_tf_out_buf(). */

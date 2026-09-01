@@ -28,6 +28,9 @@ Every command below assumes `cd ws` and `export ZEPHYR_BASE="$PWD/zephyr"`.
 
 ## Commands
 
+A `justfile` wraps all of these; `just --list` is the index. The raw commands are below because they
+are what you will want to vary.
+
 ```sh
 # Fast local loop: build + run all suites on qemu_x86 (~0.4 s of test time)
 west build -p always -b qemu_x86 -d build-t ../tests/textformat
@@ -140,6 +143,21 @@ declared `max_size`, which tail padding can differ from.
   codec, so a genuine 8-byte field reports `PB_TF_ERR_UNSUPPORTED`. Real narrowing is `int_size`.
 - Shapes the library cannot represent (`POINTER`, `CALLBACK`, `FIXARRAY`, `EXTENSION`) are **runtime**
   errors on parse and **skipped** on print — never build failures. That distinction is the point.
+
+## The sample
+
+`samples/textformat/` is a **shell application**, not a hardcoded demo: it registers a `cfg` command
+that parses whole text-format messages into a nanopb struct. `just run` boots it under QEMU.
+
+It doubles as the only executable check on `docs/shell-integration.md`. Registering
+`SHELL_OPT_ARG_RAW` correctly is subtle enough that the guide was wrong until the sample was actually
+run: **`mandatory` counts the command word plus any tokenized arguments, and the raw string lands at
+`argv[mandatory]`**, so `mandatory = 1` puts it at `argv[1]`. The raw argument is also optional, so
+`argc` can be 1 — guard before reading `argv[1]`. Zephyr's own
+`tests/subsys/shell/shell/src/main.c` asserts both shapes.
+
+To drive it non-interactively, pipe paced lines into `west build -t run`; unpaced input gets garbled
+by the console mux.
 
 ## Tests
 

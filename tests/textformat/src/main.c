@@ -1653,7 +1653,7 @@ ZTEST(pb_tf_print, test_submessage_nesting)
 
 	zassert_str_equal(PRINT_INTO(out, &fx_shapes_t_tf, &m,
 				     PB_TF_COMPACT | PB_TF_SKIP_DEFAULTS),
-			  "sing_msg {a: 1, b: -2 }");
+			  "sing_msg {a: 1, b: -2}");
 	zassert_str_equal(PRINT_INTO(out, &fx_shapes_t_tf, &m,
 				     PB_TF_MULTILINE | PB_TF_SKIP_DEFAULTS),
 			  "sing_msg {\n  a: 1\n  b: -2\n}\n");

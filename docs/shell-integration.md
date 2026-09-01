@@ -41,7 +41,10 @@ static int cmd_config(const struct shell *sh, size_t argc, char **argv)
 	pb_tf_status_t st;
 	pb_tf_err_t err;
 
-	/* argv[1] is the raw remainder of the command line. */
+	/*
+	 * argv[1] is the raw remainder of the command line. It is optional, so
+	 * argc can be 1 -- check before touching it.
+	 */
 	if (argc < 2) {
 		shell_error(sh, "usage: config <text-format message>");
 		return -EINVAL;
@@ -49,27 +52,47 @@ static int cmd_config(const struct shell *sh, size_t argc, char **argv)
 
 	err = pb_tf_parse(&ui_config_t_tf, &cfg, argv[1], 0U, &st);
 	if (err != PB_TF_OK) {
-		shell_error(sh, "at offset %u: %s%s%s", st.offset, pb_tf_strerror(err),
-			    st.field ? " in field " : "", st.field ? st.field : "");
+		/* strerror() names only the fault, so context composes cleanly. */
+		if (st.field != NULL) {
+			shell_error(sh, "at offset %u: %s in field '%s'", st.offset,
+				    pb_tf_strerror(err), st.field);
+		} else {
+			shell_error(sh, "at offset %u: %s", st.offset, pb_tf_strerror(err));
+		}
 		return -EINVAL;
 	}
 
 	return ui_apply(&cfg);
 }
 
-/* mandatory = 2: the command word plus the raw string. */
+/* mandatory = 1: just the command word. See the table below. */
 SHELL_STATIC_SUBCMD_SET_CREATE(sub_ui,
-	SHELL_CMD_ARG(config, NULL, "Set configuration", cmd_config, 2, SHELL_OPT_ARG_RAW),
+	SHELL_CMD_ARG(config, NULL, "Set configuration", cmd_config, 1, SHELL_OPT_ARG_RAW),
 	SHELL_SUBCMD_SET_END
 );
 ```
 
-Note `mandatory = 2`. `active_cmd_prepare()` sets `args_left = mandatory - 1`, so the raw string
-arrives as `argv[1]`.
+### Getting `mandatory` right
+
+`mandatory` counts the command word plus any **tokenized** mandatory arguments. The raw string then
+lands at `argv[mandatory]`:
+
+| `mandatory` | `argv[0]` | `argv[1]` | `argv[2]` |
+|---|---|---|---|
+| **1** | command | **raw remainder** | — |
+| 2 | command | one tokenized argument | **raw remainder** |
+
+So use `1` when the whole remainder is the message, and `2` when the command takes one ordinary
+argument first — `config <instance> <message>`, say. Zephyr's own
+`tests/subsys/shell/shell/src/main.c` asserts both shapes; that is the authority if you need to check.
+
+Note also that the raw argument is **optional**: with `mandatory = 1`, `argc` can be 1 when the user
+types the command with nothing after it. Check `argc` before reading `argv[1]`.
 
 ## Three caveats that come with raw arguments
 
-These follow directly from "untouched" and are easy to be surprised by.
+These follow directly from "untouched" and are easy to be surprised by. The third is a build setting
+you should just apply.
 
 ### 1. Do not wrap the argument in quotes
 
@@ -95,19 +118,24 @@ CONFIG_SHELL_CMD_BUFF_SIZE=512
 Use compact output (`PB_TF_COMPACT`, no `PB_TF_BRACES`) when generating text meant to be pasted back
 in, since it is the shortest form that still re-parses.
 
-### 3. `CONFIG_SHELL_WILDCARD` is **default `y`** — `*` and `?` in values are a hazard
-
-`CONFIG_SHELL_WILDCARD` is `default y if !SHELL_MINIMAL`, so this is the state you get unless you
-change it. Wildcard expansion **rewrites `cmd_buff`** before the handler sees it, so a `*` or `?`
-inside a string value can be expanded against the command table.
-
-If your messages carry string values that may contain `*` or `?`, disable it:
+### 3. Turn `CONFIG_SHELL_WILDCARD` off
 
 ```
 CONFIG_SHELL_WILDCARD=n
 ```
 
-This is the one caveat with no workaround on the command side — it has to be a build decision.
+Not conditionally — do this as a matter of course when a command takes a raw text-format argument.
+
+`CONFIG_SHELL_WILDCARD` is `default y if !SHELL_MINIMAL`, so it is on unless you turn it off, and
+wildcard expansion **rewrites `cmd_buff`** before the handler ever sees it. A `*` or `?` anywhere in
+the raw argument — including inside a quoted string value, which the shell has no reason to treat as
+quoted — gets expanded against the command table. The handler then receives text the user did not
+type, and the failure is silent and confusing rather than an error.
+
+There is no workaround on the command side: by the time the handler runs, the damage is done. It has
+to be a build decision, so make it once and be done with it. The only reason to leave it on is if
+something else in your firmware genuinely depends on shell wildcards, in which case keep `*` and `?`
+out of your message values entirely.
 
 ## Printing configuration back
 
@@ -180,11 +208,12 @@ To use a descriptor defined in another translation unit, declare it with `PB_TF_
 CONFIG_NANOPB=y
 CONFIG_NANOPB_TEXTFORMAT=y
 
+# Wildcard expansion rewrites cmd_buff before the handler sees it, which
+# corrupts a raw text-format argument. Turn it off; see caveat 3.
+CONFIG_SHELL_WILDCARD=n
+
 # 64-bit fields need full integral conversion in cbprintf.
 CONFIG_CBPRINTF_FULL_INTEGRAL=y
-
-# Only if your messages carry string values that may contain * or ?
-# CONFIG_SHELL_WILDCARD=n
 
 # Only if a command line may exceed 256 bytes
 # CONFIG_SHELL_CMD_BUFF_SIZE=512

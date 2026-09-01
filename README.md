@@ -60,8 +60,49 @@ CONFIG_NANOPB_TEXTFORMAT=y
 CONFIG_CBPRINTF_FULL_INTEGRAL=y   # only if you have 64-bit fields
 ```
 
-For driving this from a shell command — which needs `SHELL_OPT_ARG_RAW` and comes with three
-caveats — see **[docs/shell-integration.md](docs/shell-integration.md)**.
+For driving this from a shell command, see **[docs/shell-integration.md](docs/shell-integration.md)**:
+it needs `SHELL_OPT_ARG_RAW` on a leaf command, and `CONFIG_SHELL_WILDCARD=n`, because wildcard
+expansion rewrites the command buffer before the handler sees it.
+
+## Try it
+
+`samples/textformat/` is a shell application: it registers a `cfg` command that edits a nanopb struct
+by typing whole text-format messages, which is the use case this library exists for.
+
+```sh
+just run          # builds and boots it under QEMU (qemu_x86 by default)
+just run mps2/an385
+```
+
+Then, at the `uart:~$` prompt:
+
+```
+cfg examples                                  worked examples of every field shape
+cfg help                                      the command reference
+
+cfg set delay: 100, threshold: 500            replace the configuration
+cfg set path: [{x: 1, y: 2}, {x: 3, y: 4}]    a repeated submessage
+cfg set origin { x: -3, y: 4 }                the colon is optional before braces
+cfg set name: "hello world"                   quote the value, not the argument
+
+cfg merge tags: [3]                           keep what is there; repeated fields append
+cfg get                                       one field per line
+cfg get compact                               a single line, valid standalone text format
+cfg get set                                   the same, as a pasteable `cfg set` line
+cfg get brief                                 omit implicit-presence zeros
+cfg clear
+```
+
+Errors carry an offset and the field at fault, so a typo says where it is:
+
+```
+uart:~$ cfg set delay: -1
+at offset 7: value out of range in field 'delay'
+uart:~$ cfg set path: [{x:1},{x:2},{x:3},{x:4}]
+at offset 25: too many values in field 'path'
+```
+
+`just` lists everything else — `just test` is the full gate, `just check` the fast inner loop.
 
 ## API
 

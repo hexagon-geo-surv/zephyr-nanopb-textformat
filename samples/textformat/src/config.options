@@ -1,0 +1,3 @@
+Config.tags               max_count:4
+Config.name               max_size:16
+Config.path               max_count:3

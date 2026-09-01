@@ -238,4 +238,5 @@ spelling for a normal field but could differ for a `oneof` member, because the o
 | `PB_TF_ERR_INTERNAL` | descriptor inconsistency: a bug here, or a nanopb mismatch |
 
 `pb_tf_status_t` carries the byte `offset` into the input and, where one was in scope, the `field`
-name — enough to render `error at offset 14: value out of range for field 'threshold'`.
+name. The strings name only the fault, so a caller can append context without repeating a word:
+`at offset 14: value out of range in field 'threshold'`.

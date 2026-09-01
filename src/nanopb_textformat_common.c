@@ -63,13 +63,13 @@ const char *pb_tf_strerror(pb_tf_err_t code)
 	case PB_TF_ERR_UNKNOWN_FIELD:
 		return "no such field";
 	case PB_TF_ERR_TYPE:
-		return "wrong value type for field";
+		return "wrong value type";
 	case PB_TF_ERR_RANGE:
-		return "value out of range for field";
+		return "value out of range";
 	case PB_TF_ERR_TOO_MANY:
-		return "too many values for repeated field";
+		return "too many values";
 	case PB_TF_ERR_NO_SPACE:
-		return "value too long for field";
+		return "value too long";
 	case PB_TF_ERR_DEPTH:
 		return "nesting too deep";
 	case PB_TF_ERR_UNSUPPORTED:

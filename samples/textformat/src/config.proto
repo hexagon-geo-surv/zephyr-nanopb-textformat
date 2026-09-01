@@ -1,0 +1,20 @@
+// A small message covering the field shapes that motivate this library: an
+// optional scalar, a repeated scalar, a submessage and a string.
+syntax = "proto3";
+
+message Point {
+  int32 x = 1;
+  int32 y = 2;
+}
+
+message Config {
+  uint32 delay = 1;
+  optional uint32 threshold = 2;
+  repeated uint32 tags = 3;
+  Point origin = 4;
+  string name = 5;
+  // A repeated submessage: the shape a macro-per-field design cannot reach at
+  // all, since the preprocessor will not re-enter a macro inside its own
+  // expansion to walk Point's field list.
+  repeated Point path = 6;
+}

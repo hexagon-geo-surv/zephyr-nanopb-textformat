@@ -448,9 +448,8 @@ static pb_tf_err_t pb_tf_run_print(struct pb_tf_printer *pr)
 			pr->top--;
 			if (!pb_tf_compact(pr)) {
 				pb_tf_indent(pr);
-			} else {
-				pb_tf_put(pr, ' ');
 			}
+			/* Compact stays tight and symmetric: "origin {x: 1, y: 2}". */
 			pb_tf_put(pr, '}');
 			pb_tf_field_suffix(pr);
 			continue;
