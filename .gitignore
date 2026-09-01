@@ -5,6 +5,10 @@
 /ws/build*/
 /ws/twister-out*/
 
+# Local pyenv/virtualenv selection. Whatever provides `west` is the developer's
+# own choice, and a committed name breaks every clone that does not have it.
+.python-version
+
 # Build artefacts
 build*/
 twister-out*/

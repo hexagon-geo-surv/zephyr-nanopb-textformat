@@ -19,7 +19,7 @@ manual activation is needed. The Zephyr SDK is at `~/.local/zephyr-sdk-1.0.1`.
 nanopb `5499fd4c`). Only `ws/manifest/west.yml` is tracked. Bootstrap or reset it with:
 
 ```sh
-rip ws/zephyr ws/modules ws/.west      # if resetting
+rm -rf ws/zephyr ws/modules ws/.west   # if resetting
 west init -l ws/manifest
 cd ws && west update --narrow --fetch-opt=--depth=1 && west packages pip --install
 ```
@@ -134,7 +134,7 @@ declared `max_size`, which tail padding can differ from.
   keeps output pure ASCII, so UTF-8 payloads round-trip with no encoding logic.
 - **Float paths are guarded with `#if`, not `IS_ENABLED`.** `IS_ENABLED` keeps the code compiled and
   the symbols referenced, which would defeat the documented claim that `FLOAT=n` links no `strtod`
-  and saves ~12 KB. Verify with `nm`, not by reading.
+  and saves 8–12 KB of flash. Verify with `nm`, not by reading.
 - **`strtod` is used but not trusted.** It accepts hex floats, a leading `+`, and `nan(chars)`. The
   literal's shape is validated independently and `strtod`'s `endptr` must agree. Keep that check.
 - **Only the `inf`/`nan` words may produce a non-finite value.** Both `1e39` into a 4-byte field and

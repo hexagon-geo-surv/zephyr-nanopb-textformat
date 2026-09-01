@@ -30,9 +30,12 @@ config NANOPB_TEXTFORMAT_FLOAT
 
 	  When disabled, a float or double field reports PB_TF_ERR_NO_FLOAT in
 	  both directions rather than failing the build, and neither strtod() nor
-	  floating-point formatting is referenced, so neither is linked. Measured
-	  on mps2/an385 at -Os, turning this off took the test image from 102188
-	  to 89740 bytes of text -- about 12 KB.
+	  floating-point formatting is referenced, so neither is linked.
+
+	  Measured on mps2/an385 at -Os, this saves 8 KB of flash in the sample
+	  and 12 KB in the test application, and no RAM in either. How much you
+	  get back depends on whether something else in your image already
+	  formats floating point.
 
 	  Note: messages with 64-bit fields additionally need
 	  CBPRINTF_FULL_INTEGRAL for correct printing.

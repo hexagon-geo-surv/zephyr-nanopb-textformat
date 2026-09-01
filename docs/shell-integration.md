@@ -220,8 +220,8 @@ CONFIG_CBPRINTF_FULL_INTEGRAL=y
 ```
 
 `CONFIG_NANOPB_TEXTFORMAT_FLOAT` is `default y` and selects `CBPRINTF_FP_SUPPORT`. Setting it to `n`
-saves about 12 KB of text and makes float fields report `PB_TF_ERR_NO_FLOAT` in both directions
-rather than failing the build.
+makes float fields report `PB_TF_ERR_NO_FLOAT` in both directions rather than failing the build, and
+saves 8–12 KB of flash — see the README's Cost section.
 
 ## What to expect on the stack
 

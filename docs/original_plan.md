@@ -35,7 +35,7 @@ documented deviation (optional outer braces, off by default on output).
 | Shell input | **`SHELL_OPT_ARG_RAW`** — the handler gets the untouched remainder of `cmd_buff`. |
 | Printer | Engine is **`cbprintf`**; flags select multi-line/compact, braces, skip-defaults. Print-all default. |
 | Init | **`pb_tf_parse` clears the struct**, `PB_TF_NOINIT` opts out (mirrors `PB_DECODE_NOINIT`). |
-| Floats | `CONFIG_NANOPB_TEXTFORMAT_FLOAT`, `default y`, `depends on !MINIMAL_LIBC`, `select CBPRINTF_FP_SUPPORT`. Guarded with `#if`, not `IS_ENABLED`, so `=n` genuinely references neither `strtod()` nor FP formatting — verified: no `strtod` symbol in the image, and 12 KB less text (102188 → 89740 on mps2/an385). |
+| Floats | `CONFIG_NANOPB_TEXTFORMAT_FLOAT`, `default y`, `depends on !MINIMAL_LIBC`, `select CBPRINTF_FP_SUPPORT`. Guarded with `#if`, not `IS_ENABLED`, so `=n` genuinely references neither `strtod()` nor FP formatting — verified: no `strtod` symbol in the image, and 8 KB less flash in the sample / 12 KB in the test app on mps2/an385, and no RAM either way. |
 | Enums | **Numeric only**, both directions. Rationale below. |
 | Tests | **ztest + twister** on `mps2/an385` and `qemu_x86`, in a gitignored in-repo workspace. |
 | Zephyr | Pinned to **`v4.4.0`** (which pins nanopb `5499fd4c`) — the exact trees every fact below was verified against. |
@@ -173,7 +173,7 @@ no re-verification during milestone 0.
     `cmsis_core.h` from `zephyr/modules/cmsis_6/` (`Kconfig:8-10`,
     `select HAS_CMSIS_CORE_M if CPU_CORTEX_M`) while `zephyr/modules/cmsis/` now serves only
     Cortex-A/R — allowlisting `cmsis` fails the build with `fatal error: cmsis_core.h: No such file
-    or directory`. Note west leaves a de-allowlisted project on disk; `rip modules/hal/cmsis` after
+    or directory`. Note west leaves a de-allowlisted project on disk; delete `modules/hal/cmsis` after
     changing the list.
 
 17. **`anonymous_oneof` needs nothing.** With nanopb's `anonymous_oneof:true` the union is emitted
@@ -524,7 +524,8 @@ Each ends green under twister before the next starts.
 
 ### The workspace
 
-`ws/` is a gitignored T2 workspace living inside the repo, so `rip ws` fully resets it.
+`ws/` is a gitignored T2 workspace living inside the repo, so deleting its fetched contents fully
+resets it.
 `ws/manifest/west.yml` imports Zephyr with a three-module allowlist (fact 16):
 
 ```yaml

@@ -47,10 +47,15 @@ stack:
         | awk -F'\t' '{split($1,a,":"); printf "%-28s %6s\n", a[4], $2}' | sort -k2 -rn
 
 # Code size and RAM. data and bss must both stay 0.
+#
+# `size` comes from whichever toolchain the build used, read out of its own
+# CMakeCache, so this does not depend on where the SDK is installed.
 size:
     cd {{ ws }} && west build -p always -b mps2/an385 -d build-measure ../samples/textformat
-    @find {{ ws }}/build-measure -name 'nanopb_textformat_*.c.obj' -exec \
-        ~/.local/zephyr-sdk-1.0.1/gnu/arm-zephyr-eabi/bin/arm-zephyr-eabi-size {} +
+    @sz=$(sed -n 's|^CMAKE_C_COMPILER:.*=\(.*\)-gcc$|\1-size|p' \
+            {{ ws }}/build-measure/CMakeCache.txt); \
+     test -x "$sz" || sz=size; \
+     find {{ ws }}/build-measure -name 'nanopb_textformat_*.c.obj' -exec "$sz" {} +
 
 # Bootstrap or re-bootstrap the in-repo west workspace (~600 MB fetch).
 bootstrap:
