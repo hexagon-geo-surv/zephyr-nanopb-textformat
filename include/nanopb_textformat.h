@@ -229,7 +229,8 @@ struct pb_tf_status {
  * Either direction can also be left out entirely:
  *
  *   CONFIG_NANOPB_TEXTFORMAT_PARSE   pb_tf_parse(), pb_tf_merge()
- *   CONFIG_NANOPB_TEXTFORMAT_PRINT   pb_tf_print(), pb_tf_print_buf()
+ *   CONFIG_NANOPB_TEXTFORMAT_PRINT   pb_tf_print_styled(), pb_tf_print_buf_styled()
+ *                                    and the eight style-named wrappers
  *
  * Both default to y. The declarations below are guarded on them, so calling
  * into a half that was configured out is a compile error naming the function
@@ -376,9 +377,8 @@ struct pb_tf_buf {
  * Note the consequence of "as it writes": a message that prints nothing at all
  * -- an empty message, or one whose every field is skipped under
  * CONFIG_NANOPB_TEXTFORMAT_PRINT_SKIP_DEFAULTS -- never calls this, so the
- * buffer is left exactly as
- * the caller supplied it. Either pre-terminate it, or use pb_tf_print_buf(),
- * which handles that case.
+ * buffer is left exactly as the caller supplied it. Either pre-terminate it,
+ * or use one of the pb_tf_print_buf_* forms, which handle that case.
  */
 int pb_tf_out_buf(int c, void *ctx);
 

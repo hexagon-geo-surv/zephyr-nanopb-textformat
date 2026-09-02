@@ -28,8 +28,8 @@ config NANOPB_TEXTFORMAT_PARSE
 	  configuration, say, without accepting one. The parser is the larger half
 	  by some margin, so this is the bigger of the two savings.
 
-	  With this off, the two functions are not declared, so a call to either is
-	  a compile error naming the function rather than a link failure.
+	  With this off, none of them are declared, so a call to any is a compile
+	  error naming the function rather than a link failure.
 
 config NANOPB_TEXTFORMAT_PRINT
 	bool "Print a struct as text format"
@@ -42,7 +42,8 @@ config NANOPB_TEXTFORMAT_PRINT
 	# build has no such need and works under CBPRINTF_NANO.
 	depends on CBPRINTF_COMPLETE
 	help
-	  Build pb_tf_print() and pb_tf_print_buf().
+	  Build the printer: pb_tf_print_styled(), pb_tf_print_buf_styled() and the
+	  eight style-named wrappers over them.
 
 	  Turn this off for a firmware that only ever accepts a message -- applying
 	  a configuration without reporting one back.

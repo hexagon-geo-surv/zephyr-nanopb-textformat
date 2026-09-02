@@ -48,8 +48,8 @@ struct pb_tf_printer {
 	 *
 	 * Carried here rather than read from Kconfig at each use, because an
 	 * application may want both: multi-line for a person reading a
-	 * configuration, compact for a line it means to paste or log. The
-	 * Kconfig option still decides what plain pb_tf_print() does.
+	 * configuration, compact for a line it means to paste or log, and it may
+	 * not know which until run time.
 	 */
 	bool compact;
 	/** Wrap the whole message in braces. */
@@ -63,8 +63,8 @@ struct pb_tf_printer {
 /*
  * The line style and the braces are named by the caller, so they are not
  * Kconfig. Skipping defaults still is: unlike the style, it is not something
- * one firmware plausibly wants both ways, and making it per-call would double
- * the number of entry points.
+ * one firmware plausibly wants both ways, and making it per-call would mean a
+ * third boolean on every entry point.
  */
 #define PB_TF_SKIPS_DEFAULTS IS_ENABLED(CONFIG_NANOPB_TEXTFORMAT_PRINT_SKIP_DEFAULTS)
 
