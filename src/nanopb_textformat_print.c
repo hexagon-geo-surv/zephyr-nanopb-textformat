@@ -24,6 +24,27 @@
 
 #include "nanopb_textformat_priv.h"
 
+/*
+ * Every integer is cast to long long and printed with %lld/%llu, whatever the
+ * field's own width, so full integral conversion is required for *all* integer
+ * fields and not only 64-bit ones. Without it cbprintf drops the conversion and
+ * the printed value is wrong rather than merely imprecise -- and it does so
+ * silently, which is why this is an assertion.
+ *
+ * These cannot be `select`ed from this module's Kconfig: both are members of a
+ * Kconfig `choice` (CBPRINTF_IMPLEMENTATION and CBPRINTF_INTEGRAL_CONV), and
+ * Kconfig does not support selecting a choice member. Both are already Zephyr's
+ * defaults, so this only fires for a project that deliberately opted out.
+ */
+BUILD_ASSERT(IS_ENABLED(CONFIG_CBPRINTF_COMPLETE),
+	     "nanopb_textformat needs CONFIG_CBPRINTF_COMPLETE=y: CBPRINTF_NANO cannot format "
+	     "the %lld/%llu and %g conversions the printer emits.");
+
+BUILD_ASSERT(IS_ENABLED(CONFIG_CBPRINTF_FULL_INTEGRAL),
+	     "nanopb_textformat needs CONFIG_CBPRINTF_FULL_INTEGRAL=y: with reduced integral "
+	     "conversion, printed integers are silently wrong. It is the Kconfig default; "
+	     "something in this build set CBPRINTF_REDUCED_INTEGRAL instead.");
+
 /** Nothing has been emitted in this body yet, so no separator is due. */
 #define PB_TF_PF_FIRST 0x01U
 

@@ -152,6 +152,10 @@ declared `max_size`, which tail padding can differ from.
   codec, so a genuine 8-byte field reports `PB_TF_ERR_UNSUPPORTED`. Real narrowing is `int_size`.
 - Shapes the library cannot represent (`POINTER`, `CALLBACK`, `FIXARRAY`, `EXTENSION`) are **runtime**
   errors on parse and **skipped** on print — never build failures. That distinction is the point.
+- **The printer needs `CBPRINTF_COMPLETE` and `CBPRINTF_FULL_INTEGRAL` for every integer**, not just
+  64-bit ones, because `pb_tf_print_int()` casts everything to `long long`. Both are Kconfig *choice*
+  members, so they cannot be `select`ed — `print.c` `BUILD_ASSERT`s on them instead. Reduced integral
+  conversion otherwise builds cleanly and prints wrong numbers.
 
 ## The sample
 
@@ -165,8 +169,14 @@ run: **`mandatory` counts the command word plus any tokenized arguments, and the
 `argc` can be 1 — guard before reading `argv[1]`. Zephyr's own
 `tests/subsys/shell/shell/src/main.c` asserts both shapes.
 
-To drive it non-interactively, pipe paced lines into `west build -t run`; unpaced input gets garbled
-by the console mux.
+It is built with `-S nanopb-textformat-shell`, the snippet this module ships, so the sample is also
+the test that the snippet resolves and applies.
+
+To drive it non-interactively, pipe lines into `west build -t run` with a short pause between them.
+An earlier version of this file blamed garbled unpaced input on the console mux; that was wrong. The
+cause is `CONFIG_SHELL_BACKEND_SERIAL_RX_RING_BUFFER_SIZE`, which defaults to **64 bytes** and is
+sized for a keyboard — anything pasted or piped past that is dropped, silently, before the handler
+sees it. The snippet raises it to 1024, and pacing then only matters for reading the transcript.
 
 ## Tests
 

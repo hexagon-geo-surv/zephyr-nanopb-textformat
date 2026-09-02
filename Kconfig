@@ -22,7 +22,11 @@ config NANOPB_TEXTFORMAT_FLOAT
 	bool "Parse and print float and double fields"
 	default y
 	depends on !MINIMAL_LIBC
-	select CBPRINTF_FP_SUPPORT
+	# Guarded: CBPRINTF_FP_SUPPORT itself depends on CBPRINTF_COMPLETE, which is
+	# a choice member and so cannot be selected. Without the guard, a
+	# CBPRINTF_NANO build failed on an unmet Kconfig dependency rather than on
+	# the library's own BUILD_ASSERT, which says what to do about it.
+	select CBPRINTF_FP_SUPPORT if CBPRINTF_COMPLETE
 	help
 	  Enable float/double support. Parsing needs strtod(), which the minimal
 	  libc does not provide, hence the dependency. Printing needs

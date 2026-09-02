@@ -89,10 +89,23 @@ argument first — `config <instance> <message>`, say. Zephyr's own
 Note also that the raw argument is **optional**: with `mandatory = 1`, `argc` can be 1 when the user
 types the command with nothing after it. Check `argc` before reading `argv[1]`.
 
-## Three caveats that come with raw arguments
+## Just apply the snippet
 
-These follow directly from "untouched" and are easy to be surprised by. The third is a build setting
-you should just apply.
+Every setting below ships as a snippet in this module, so you do not have to assemble the list:
+
+```sh
+west build -S nanopb-textformat-shell -b <board> <app>
+```
+
+It sets `CONFIG_SHELL_WILDCARD=n`, raises the command buffer and the serial RX ring buffer, and
+pins the two cbprintf conversions. `samples/textformat/` is built exactly that way, so it is also
+the test that the snippet works. Read on if you would rather apply them individually, or want to
+know why each one is there.
+
+## Four caveats that come with raw arguments
+
+The first follows from "untouched" and is a usage note. The other three are build settings, and the
+last of them is the one most likely to waste an afternoon.
 
 ### 1. Do not wrap the argument in quotes
 
@@ -136,6 +149,27 @@ There is no workaround on the command side: by the time the handler runs, the da
 to be a build decision, so make it once and be done with it. The only reason to leave it on is if
 something else in your firmware genuinely depends on shell wildcards, in which case keep `*` and `?`
 out of your message values entirely.
+
+### 4. Raise `CONFIG_SHELL_BACKEND_SERIAL_RX_RING_BUFFER_SIZE`
+
+```
+CONFIG_SHELL_BACKEND_SERIAL_RX_RING_BUFFER_SIZE=1024
+```
+
+This is the one that looks like a bug in the parser, because the failure is silent and the input is
+already wrong before your handler sees it.
+
+The default is **64 bytes** (`subsys/shell/backends/Kconfig.backends:93`), and its own help text says
+that is fine "if shell input is coming from the keyboard". A **pasted or piped** line arrives far
+faster than the shell drains it, so anything past 64 bytes is dropped and the handler receives a
+truncated message. It then fails to parse, at an offset that looks arbitrary, and the error points at
+a field that is fine.
+
+Typing the same line by hand works, which is what makes this so confusing: the bug appears only when
+you copy the very output that `cfg get set` produced for you to paste back.
+
+Raise it to comfortably exceed your longest message. It is receive-buffer RAM, so the cost is one
+allocation of that size.
 
 ## Printing configuration back
 
@@ -204,19 +238,36 @@ To use a descriptor defined in another translation unit, declare it with `PB_TF_
 
 ## Kconfig checklist
 
+Either take the snippet:
+
+```sh
+west build -S nanopb-textformat-shell ...
+```
+
+or set the same things by hand:
+
 ```
 CONFIG_NANOPB=y
 CONFIG_NANOPB_TEXTFORMAT=y
 
 # Wildcard expansion rewrites cmd_buff before the handler sees it, which
-# corrupts a raw text-format argument. Turn it off; see caveat 3.
+# corrupts a raw text-format argument. See caveat 3.
 CONFIG_SHELL_WILDCARD=n
 
-# 64-bit fields need full integral conversion in cbprintf.
-CONFIG_CBPRINTF_FULL_INTEGRAL=y
+# The whole command line, not just the message. Default 256. See caveat 2.
+CONFIG_SHELL_CMD_BUFF_SIZE=1024
 
-# Only if a command line may exceed 256 bytes
-# CONFIG_SHELL_CMD_BUFF_SIZE=512
+# Default 64, sized for a keyboard. A pasted line is silently truncated past
+# that. See caveat 4 -- this is the one that looks like a parse bug.
+CONFIG_SHELL_BACKEND_SERIAL_RX_RING_BUFFER_SIZE=1024
+
+# The printer casts every integer to long long and prints %lld/%llu, so full
+# integral conversion is needed for *all* integer fields, not only 64-bit ones.
+# Both are already Zephyr defaults; the library BUILD_ASSERTs on them rather
+# than printing silently wrong numbers, so you only need these if something in
+# your build changed them.
+CONFIG_CBPRINTF_COMPLETE=y
+CONFIG_CBPRINTF_FULL_INTEGRAL=y
 ```
 
 `CONFIG_NANOPB_TEXTFORMAT_FLOAT` is `default y` and selects `CBPRINTF_FP_SUPPORT`. Setting it to `n`

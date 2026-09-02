@@ -43,7 +43,7 @@ manifest:
   projects:
     - name: zephyr-nanopb-textformat
       remote: rodrigopex
-      revision: v0.1.1
+      revision: v0.2.0
       path: modules/lib/zephyr-nanopb-textformat
 ```
 
@@ -86,7 +86,13 @@ char text[128];
 ```
 CONFIG_NANOPB=y
 CONFIG_NANOPB_TEXTFORMAT=y
-CONFIG_CBPRINTF_FULL_INTEGRAL=y   # only if you have 64-bit fields
+```
+
+That is all the library itself needs. If you are driving it from a shell command, take the snippet
+this module ships rather than assembling the settings by hand:
+
+```sh
+west build -S nanopb-textformat-shell -b <board> <app>
 ```
 
 For driving this from a shell command, see **[docs/shell-integration.md](docs/shell-integration.md)**:
@@ -297,12 +303,11 @@ if (st.field != NULL) {
 }
 ```
 
-**Set `CONFIG_CBPRINTF_FULL_INTEGRAL=y` if any message has a 64-bit field**, or printing it will be
-wrong rather than merely imprecise.
-
-**Turn `CONFIG_SHELL_WILDCARD=n`** if a shell command takes a raw text-format argument. It is default
-`y` and rewrites the command buffer before your handler runs. See
-[docs/shell-integration.md](docs/shell-integration.md).
+**Driving it from a shell? Use the snippet.** `west build -S nanopb-textformat-shell` applies the
+four settings a raw text-format argument needs. The one you would never guess:
+`CONFIG_SHELL_BACKEND_SERIAL_RX_RING_BUFFER_SIZE` defaults to **64 bytes**, so a *pasted* message is
+silently truncated mid-parse while the same line typed by hand works.
+[docs/shell-integration.md](docs/shell-integration.md) explains all four.
 
 ## Configuration
 
@@ -312,8 +317,16 @@ wrong rather than merely imprecise.
 | `NANOPB_TEXTFORMAT_FLOAT` | `y` | Float and double support. `depends on !MINIMAL_LIBC` (needs `strtod`) and selects `CBPRINTF_FP_SUPPORT`. `n` makes float fields report `PB_TF_ERR_NO_FLOAT` in both directions and saves 8–12 KB of flash, depending on what else in the image formats floats |
 | `NANOPB_TEXTFORMAT_MAX_DEPTH` | `8` | Submessage nesting limit, range 1–32. Costs 20 bytes of stack per level |
 
-Messages with 64-bit fields also need `CONFIG_CBPRINTF_FULL_INTEGRAL=y`, since
-`CBPRINTF_INTEGRAL_CONV` can otherwise drop 64-bit conversion.
+### cbprintf
+
+The printer casts every integer to `long long` and prints `%lld`/`%llu`, so it needs
+`CONFIG_CBPRINTF_COMPLETE=y` and `CONFIG_CBPRINTF_FULL_INTEGRAL=y` for **all** integer fields, not
+only 64-bit ones.
+
+Both are already Zephyr's defaults, so normally there is nothing to do. They are also Kconfig
+*choice* members, which means this module cannot `select` them — so instead it `BUILD_ASSERT`s on
+them, and a project that deliberately opted out gets a build error naming the symbol rather than
+silently wrong numbers.
 
 ## Tests
 
@@ -371,7 +384,7 @@ forced it.
 
 ## Versioning
 
-[Semantic versioning](https://semver.org). The current version is **0.1.1**.
+[Semantic versioning](https://semver.org). The current version is **0.2.0**.
 
 Major is still 0, which means the API may change — the library is complete and tested, but nobody
 outside this repository has used it yet, and the error strings were reworded as recently as the first

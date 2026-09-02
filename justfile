@@ -18,9 +18,10 @@ export ZEPHYR_BASE := justfile_directory() / "ws" / "zephyr"
 default:
     @just --list --unsorted
 
-# Build the sample for BOARD.
+# Build the sample for BOARD, via the module's own shell snippet.
 build board=board:
-    cd {{ ws }} && west build -p always -b {{ board }} -d build-sample ../samples/textformat
+    cd {{ ws }} && west build -p always -b {{ board }} -d build-sample \
+        -S nanopb-textformat-shell ../samples/textformat
 
 # Build and run the sample under QEMU; gives a shell, Ctrl-A X to quit.
 run board=board: (build board)
