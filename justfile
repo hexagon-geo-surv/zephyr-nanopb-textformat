@@ -31,7 +31,12 @@ test:
     cd {{ ws }} && west twister -T ../tests -p mps2/an385 -p qemu_x86 --inline-logs
 
 # The host-libc gate: native_sim in Docker. Needs `test-native-image` once.
-test-native platform="native_sim":
+#
+# Defaults to the 64-bit qualifier because plain `native_sim` is 32-bit and
+# needs gcc-multilib, which does not exist on aarch64 -- on an arm64 host every
+# scenario fails in arch/posix/aarch64.cmake before compiling anything. Pass
+# `just test-native native_sim` explicitly on an x86_64 host to cover 32-bit.
+test-native platform="native_sim/native/64":
     docker run --rm -v {{ justfile_directory() }}:/work nptf-native sh -c '\
         export ZEPHYR_BASE=/work/ws/zephyr ZEPHYR_TOOLCHAIN_VARIANT=host && \
         cd /work/ws && \
