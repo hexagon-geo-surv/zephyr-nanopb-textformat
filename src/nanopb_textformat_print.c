@@ -17,33 +17,13 @@
  * stack-growth mechanism is not worth keeping for symmetry's sake.
  */
 
+#include <inttypes.h>
 #include <stdarg.h>
 #include <string.h>
 
 #include <pb_common.h>
 
 #include "nanopb_textformat_priv.h"
-
-/*
- * Every integer is cast to long long and printed with %lld/%llu, whatever the
- * field's own width, so full integral conversion is required for *all* integer
- * fields and not only 64-bit ones. Without it cbprintf drops the conversion and
- * the printed value is wrong rather than merely imprecise -- and it does so
- * silently, which is why this is an assertion.
- *
- * These cannot be `select`ed from this module's Kconfig: both are members of a
- * Kconfig `choice` (CBPRINTF_IMPLEMENTATION and CBPRINTF_INTEGRAL_CONV), and
- * Kconfig does not support selecting a choice member. Both are already Zephyr's
- * defaults, so this only fires for a project that deliberately opted out.
- */
-BUILD_ASSERT(IS_ENABLED(CONFIG_CBPRINTF_COMPLETE),
-	     "nanopb_textformat needs CONFIG_CBPRINTF_COMPLETE=y: CBPRINTF_NANO cannot format "
-	     "the %lld/%llu and %g conversions the printer emits.");
-
-BUILD_ASSERT(IS_ENABLED(CONFIG_CBPRINTF_FULL_INTEGRAL),
-	     "nanopb_textformat needs CONFIG_CBPRINTF_FULL_INTEGRAL=y: with reduced integral "
-	     "conversion, printed integers are silently wrong. It is the Kconfig default; "
-	     "something in this build set CBPRINTF_REDUCED_INTEGRAL instead.");
 
 /** Nothing has been emitted in this body yet, so no separator is due. */
 #define PB_TF_PF_FIRST 0x01U
@@ -225,52 +205,76 @@ static bool pb_tf_print_is_signed(uint8_t vtype)
 /**
  * Read an integer of @p data_size and print it.
  *
- * The width chain mirrors the parser's, which mirrors nanopb's. Note this is
- * where the row's vtype earns its keep on the way out too: nanopb's runtime
- * pb_type_t cannot distinguish a float from a fixed32, so a printer driven by
- * the iterator alone could not tell whether to write 1.0 or 1.
+ * The specifier matches the width rather than promoting everything to
+ * long long, which matters for more than tidiness: CBPRINTF_REDUCED_INTEGRAL
+ * drops conversions wider than 32 bits, and under CBPRINTF_COMPLETE such a
+ * conversion emits the *specification* ("%jd") instead of a number. Promoting a
+ * uint32 field to %llu therefore made every field depend on full integral
+ * conversion. Printing it as PRIu32 confines that requirement to the fields that
+ * genuinely need it, and a message with no 64-bit field works either way.
+ *
+ * Note this is also where the row's vtype earns its keep on the way out:
+ * nanopb's runtime pb_type_t cannot distinguish a float from a fixed32, so a
+ * printer driven by the iterator alone could not tell whether to write 1.0 or 1.
  */
 static pb_tf_err_t pb_tf_print_int(struct pb_tf_printer *pr, const pb_tf_field_t *row,
 				   pb_size_t data_size, const void *src)
 {
+	bool sign = pb_tf_print_is_signed(row->vtype);
+
 	if (data_size > sizeof(pb_tf_uint64_t)) {
 		/* An int64 field under PB_WITHOUT_64BIT; see the parser. */
 		return PB_TF_ERR_UNSUPPORTED;
 	}
 
-	if (pb_tf_print_is_signed(row->vtype)) {
-		long long v;
+	if (data_size > sizeof(uint32_t)) {
+		/*
+		 * Genuinely wider than 32 bits, so this is the one path that
+		 * needs CONFIG_CBPRINTF_FULL_INTEGRAL. Without it the conversion
+		 * would emit "%jd" rather than a number, so refuse instead --
+		 * the same runtime degradation PB_WITHOUT_64BIT gets, for the
+		 * same reason.
+		 */
+		if (!IS_ENABLED(CONFIG_CBPRINTF_FULL_INTEGRAL)) {
+			return PB_TF_ERR_UNSUPPORTED;
+		}
 
-		if (data_size == sizeof(pb_tf_int64_t)) {
-			v = (long long)*(const pb_tf_int64_t *)src;
-		} else if (data_size == sizeof(int32_t)) {
-			v = (long long)*(const int32_t *)src;
+		if (sign) {
+			return pb_tf_emit(pr, "%" PRId64, (int64_t)*(const pb_tf_int64_t *)src);
+		}
+		return pb_tf_emit(pr, "%" PRIu64, (uint64_t)*(const pb_tf_uint64_t *)src);
+	}
+
+	/* 1, 2 or 4 bytes: a 32-bit conversion, which every cbprintf provides. */
+	if (sign) {
+		int32_t v;
+
+		if (data_size == sizeof(int32_t)) {
+			v = *(const int32_t *)src;
 		} else if (data_size == sizeof(int_least16_t)) {
-			v = (long long)*(const int_least16_t *)src;
+			v = *(const int_least16_t *)src;
 		} else if (data_size == sizeof(int_least8_t)) {
-			v = (long long)*(const int_least8_t *)src;
+			v = *(const int_least8_t *)src;
 		} else {
 			return PB_TF_ERR_INTERNAL;
 		}
 
-		return pb_tf_emit(pr, "%lld", v);
+		return pb_tf_emit(pr, "%" PRId32, v);
 	}
 
-	unsigned long long v;
+	uint32_t v;
 
-	if (data_size == sizeof(pb_tf_uint64_t)) {
-		v = (unsigned long long)*(const pb_tf_uint64_t *)src;
-	} else if (data_size == sizeof(uint32_t)) {
-		v = (unsigned long long)*(const uint32_t *)src;
+	if (data_size == sizeof(uint32_t)) {
+		v = *(const uint32_t *)src;
 	} else if (data_size == sizeof(uint_least16_t)) {
-		v = (unsigned long long)*(const uint_least16_t *)src;
+		v = *(const uint_least16_t *)src;
 	} else if (data_size == sizeof(uint_least8_t)) {
-		v = (unsigned long long)*(const uint_least8_t *)src;
+		v = *(const uint_least8_t *)src;
 	} else {
 		return PB_TF_ERR_INTERNAL;
 	}
 
-	return pb_tf_emit(pr, "%llu", v);
+	return pb_tf_emit(pr, "%" PRIu32, v);
 }
 
 static pb_tf_err_t pb_tf_print_scalar(struct pb_tf_printer *pr, const pb_tf_field_t *row,

@@ -2231,8 +2231,15 @@ ZTEST(pb_tf_float, test_full_scalars_round_trip)
 	fx_scalars_t a;
 	fx_scalars_t b;
 
-	if (IS_ENABLED(CONFIG_NANOPB_WITHOUT_64BIT)) {
-		/* 8-byte fields are unrepresentable in this build by design. */
+	if (IS_ENABLED(CONFIG_NANOPB_WITHOUT_64BIT) ||
+	    !IS_ENABLED(CONFIG_CBPRINTF_FULL_INTEGRAL)) {
+		/*
+		 * Two independent reasons an 8-byte field is unrepresentable
+		 * here: PB_WITHOUT_64BIT narrows the codec, and reduced integral
+		 * conversion cannot print wider than 32 bits. Narrower fields
+		 * are unaffected either way, which is the point of using
+		 * width-correct conversions.
+		 */
 		ztest_test_skip();
 	}
 

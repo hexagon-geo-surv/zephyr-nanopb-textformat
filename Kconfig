@@ -4,6 +4,12 @@
 config NANOPB_TEXTFORMAT
 	bool "Protobuf text format for nanopb messages"
 	depends on NANOPB
+	# A hard requirement, not a preference. The printer escapes non-printable
+	# bytes as three-digit octal, and CBPRINTF_NANO has no %o conversion at all
+	# -- it emits "\12" where "\012" is required, which re-parses wrongly
+	# whenever the next byte is a digit. Depending on the choice member is the
+	# only way to say this in Kconfig; it cannot be selected.
+	depends on CBPRINTF_COMPLETE
 	help
 	  Parse a subset of the protobuf text format
 	  (https://protobuf.dev/reference/protobuf/textformat-spec/) directly
@@ -22,11 +28,9 @@ config NANOPB_TEXTFORMAT_FLOAT
 	bool "Parse and print float and double fields"
 	default y
 	depends on !MINIMAL_LIBC
-	# Guarded: CBPRINTF_FP_SUPPORT itself depends on CBPRINTF_COMPLETE, which is
-	# a choice member and so cannot be selected. Without the guard, a
-	# CBPRINTF_NANO build failed on an unmet Kconfig dependency rather than on
-	# the library's own BUILD_ASSERT, which says what to do about it.
-	select CBPRINTF_FP_SUPPORT if CBPRINTF_COMPLETE
+	# Sound because the whole module already depends on CBPRINTF_COMPLETE,
+	# which is what CBPRINTF_FP_SUPPORT itself requires.
+	select CBPRINTF_FP_SUPPORT
 	help
 	  Enable float/double support. Parsing needs strtod(), which the minimal
 	  libc does not provide, hence the dependency. Printing needs
@@ -41,8 +45,11 @@ config NANOPB_TEXTFORMAT_FLOAT
 	  get back depends on whether something else in your image already
 	  formats floating point.
 
-	  Note: messages with 64-bit fields additionally need
-	  CBPRINTF_FULL_INTEGRAL for correct printing.
+	  Note: messages with genuine 64-bit fields additionally need
+	  CBPRINTF_FULL_INTEGRAL, which is the Kconfig default. Narrower fields do
+	  not -- the printer uses width-correct conversions (PRIu32 and friends),
+	  so only fields wider than 32 bits depend on it, and such a field reports
+	  PB_TF_ERR_UNSUPPORTED if it is unavailable.
 
 config NANOPB_TEXTFORMAT_MAX_DEPTH
 	int "Maximum submessage nesting depth"
