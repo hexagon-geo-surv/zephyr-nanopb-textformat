@@ -50,10 +50,10 @@ extern "C" {
  */
 /**@{*/
 #define NANOPB_TEXTFORMAT_VERSION_MAJOR 0
-#define NANOPB_TEXTFORMAT_VERSION_MINOR 6
+#define NANOPB_TEXTFORMAT_VERSION_MINOR 7
 #define NANOPB_TEXTFORMAT_VERSION_PATCH 0
 
-#define NANOPB_TEXTFORMAT_VERSION_STRING "0.6.0"
+#define NANOPB_TEXTFORMAT_VERSION_STRING "0.7.0"
 
 /**
  * @brief Version as @c 0xMMmmpp, for comparison.
@@ -267,23 +267,32 @@ int pb_tf_merge(const struct pb_tf_msg *tf, void *msg, const char *text,
 			struct pb_tf_status *status);
 #endif /* CONFIG_NANOPB_TEXTFORMAT_PARSE */
 
+#if defined(CONFIG_NANOPB_TEXTFORMAT_PRINT)
 /**
- * @brief Print a nanopb struct as text format.
+ * @brief Print a nanopb struct as text format, in an explicitly given style.
  *
  * Output is produced character by character through @p out, so there is no
- * length limit and no temporary buffer. @c cbprintf_cb is Zephyr's own
- * callback type; pb_tf_out_buf() is a ready-made one that fills a buffer.
+ * length limit and no temporary buffer. @c cbprintf_cb is Zephyr's own callback
+ * type; pb_tf_out_buf() is a ready-made one that fills a buffer.
  *
- * The style comes from Kconfig; see the note above the API.
+ * Prefer one of the four style-named wrappers below: two bare booleans at a
+ * call site say nothing about what comes out. Reach for this form when the
+ * style is chosen at run time -- a shell command offering
+ * @c "get [compact] [braces]", say -- where the alternative is a four-way
+ * branch picking among the wrappers.
  *
- * @param tf    descriptor from PB_TF_DEFINE
- * @param msg   the struct to print
- * @param out   character sink
- * @param ctx   passed to @p out
+ * @param tf       descriptor from PB_TF_DEFINE
+ * @param msg      the struct to print
+ * @param out      character sink
+ * @param ctx      passed to @p out
+ * @param compact  one line, rather than one field per line
+ * @param braces   wrap the whole message in @c { }
  *
- * @return PB_TF_OK, or the first error encountered.
+ * @return 0, or a negated @ref pb_tf_err -- the first error encountered.
  */
-#if defined(CONFIG_NANOPB_TEXTFORMAT_PRINT)
+int pb_tf_print_styled(const struct pb_tf_msg *tf, const void *msg, cbprintf_cb out, void *ctx,
+		       bool compact, bool braces);
+
 /**
  * @name Printing in a style named at the call site
  *
@@ -293,23 +302,38 @@ int pb_tf_merge(const struct pb_tf_msg *tf, void *msg, const char *text,
  * it is. There is deliberately no style-agnostic pb_tf_print(): its output
  * would depend on a Kconfig the reader has to go and look up.
  *
- * Zephyr compiles with @c -ffunction-sections and links with @c --gc-sections,
- * so a variant your application never calls costs nothing in the final image.
+ * These are @c static @c inline and so generate no function of their own: the
+ * call site materialises the two style arguments and calls
+ * pb_tf_print_styled() directly, which is why having four of them costs
+ * nothing.
  *
  * @c CONFIG_NANOPB_TEXTFORMAT_PRINT_SKIP_DEFAULTS remains Kconfig-only: unlike
  * the line style it is not something one firmware plausibly wants both ways.
  */
 /**@{*/
-int pb_tf_print_compact(const struct pb_tf_msg *tf, const void *msg, cbprintf_cb out, void *ctx);
+static inline int pb_tf_print_compact(const struct pb_tf_msg *tf, const void *msg, cbprintf_cb out,
+				      void *ctx)
+{
+	return pb_tf_print_styled(tf, msg, out, ctx, true, false);
+}
 
-int pb_tf_print_multiline(const struct pb_tf_msg *tf, const void *msg, cbprintf_cb out,
-				  void *ctx);
+static inline int pb_tf_print_multiline(const struct pb_tf_msg *tf, const void *msg,
+					cbprintf_cb out, void *ctx)
+{
+	return pb_tf_print_styled(tf, msg, out, ctx, false, false);
+}
 
-int pb_tf_print_compact_braces(const struct pb_tf_msg *tf, const void *msg, cbprintf_cb out,
-				       void *ctx);
+static inline int pb_tf_print_compact_braces(const struct pb_tf_msg *tf, const void *msg,
+					     cbprintf_cb out, void *ctx)
+{
+	return pb_tf_print_styled(tf, msg, out, ctx, true, true);
+}
 
-int pb_tf_print_multiline_braces(const struct pb_tf_msg *tf, const void *msg, cbprintf_cb out,
-					 void *ctx);
+static inline int pb_tf_print_multiline_braces(const struct pb_tf_msg *tf, const void *msg,
+					       cbprintf_cb out, void *ctx)
+{
+	return pb_tf_print_styled(tf, msg, out, ctx, false, true);
+}
 /**@}*/
 #endif
 
@@ -358,35 +382,55 @@ struct pb_tf_buf {
  */
 int pb_tf_out_buf(int c, void *ctx);
 
-/**
- * @brief Print into a caller-supplied buffer.
- *
- * Wraps pb_tf_print() and pb_tf_out_buf() for the common case, and differs from
- * using them directly in two ways worth having: @p buf is NUL-terminated even
- * when nothing is printed, and truncation comes back as @c PB_TF_ERR_NO_SPACE
- * rather than a flag the caller has to remember to check.
- *
- * @param tf    descriptor from PB_TF_DEFINE
- * @param msg   the struct to print
- * @param buf   destination, always NUL-terminated on return
- * @param size  bytes available in @p buf, including the terminator
- *
- * @return PB_TF_OK, @c PB_TF_ERR_NO_SPACE if the output was truncated, or the
- *         first print error.
- */
 #if defined(CONFIG_NANOPB_TEXTFORMAT_PRINT)
-/** @name As pb_tf_print_buf(), in a style named at the call site. */
+/**
+ * @brief Print into a caller-supplied buffer, in an explicitly given style.
+ *
+ * Wraps pb_tf_print_styled() and pb_tf_out_buf() for the common case, and
+ * differs from using them directly in two ways worth having: @p buf is
+ * NUL-terminated even when nothing is printed, and truncation comes back as
+ * @c PB_TF_ERR_NO_SPACE rather than a flag the caller must remember to check.
+ *
+ * As above, prefer a style-named wrapper unless the style is a run-time choice.
+ *
+ * @param tf       descriptor from PB_TF_DEFINE
+ * @param msg      the struct to print
+ * @param buf      destination, always NUL-terminated on return
+ * @param size     bytes available in @p buf, including the terminator
+ * @param compact  one line, rather than one field per line
+ * @param braces   wrap the whole message in @c { }
+ *
+ * @return 0, @c -PB_TF_ERR_NO_SPACE if the output was truncated, or the first
+ *         print error, negated.
+ */
+int pb_tf_print_buf_styled(const struct pb_tf_msg *tf, const void *msg, char *buf, size_t size,
+			   bool compact, bool braces);
+
+/** @name As pb_tf_print_buf_styled(), in a style named at the call site. */
 /**@{*/
-int pb_tf_print_buf_compact(const struct pb_tf_msg *tf, const void *msg, char *buf, size_t size);
+static inline int pb_tf_print_buf_compact(const struct pb_tf_msg *tf, const void *msg, char *buf,
+					  size_t size)
+{
+	return pb_tf_print_buf_styled(tf, msg, buf, size, true, false);
+}
 
-int pb_tf_print_buf_multiline(const struct pb_tf_msg *tf, const void *msg, char *buf,
-				      size_t size);
+static inline int pb_tf_print_buf_multiline(const struct pb_tf_msg *tf, const void *msg, char *buf,
+					    size_t size)
+{
+	return pb_tf_print_buf_styled(tf, msg, buf, size, false, false);
+}
 
-int pb_tf_print_buf_compact_braces(const struct pb_tf_msg *tf, const void *msg, char *buf,
-					   size_t size);
+static inline int pb_tf_print_buf_compact_braces(const struct pb_tf_msg *tf, const void *msg,
+						 char *buf, size_t size)
+{
+	return pb_tf_print_buf_styled(tf, msg, buf, size, true, true);
+}
 
-int pb_tf_print_buf_multiline_braces(const struct pb_tf_msg *tf, const void *msg, char *buf,
-					     size_t size);
+static inline int pb_tf_print_buf_multiline_braces(const struct pb_tf_msg *tf, const void *msg,
+						   char *buf, size_t size)
+{
+	return pb_tf_print_buf_styled(tf, msg, buf, size, false, true);
+}
 /**@}*/
 #endif
 

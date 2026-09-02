@@ -1632,6 +1632,78 @@ ZTEST(pb_tf_print, test_every_style_exactly)
 	zassert_str_equal(out, "{\n  plain_scalar: 1\n  opt_scalar: 2\n}\n");
 }
 
+/*
+ * The four style-named wrappers are static inline in the public header, so this
+ * asserts each one passes the pair of booleans it advertises. A wrapper wired to
+ * the wrong flags still compiles and still prints valid text format -- just the
+ * wrong shape -- so nothing but a byte comparison against the explicit form
+ * catches it.
+ */
+ZTEST(pb_tf_print, test_wrappers_match_styled)
+{
+	static const struct {
+		bool compact;
+		bool braces;
+		int (*wrapper)(const struct pb_tf_msg *tf, const void *msg, char *buf, size_t size);
+	} cases[] = {
+		{true, false, pb_tf_print_buf_compact},
+		{false, false, pb_tf_print_buf_multiline},
+		{true, true, pb_tf_print_buf_compact_braces},
+		{false, true, pb_tf_print_buf_multiline_braces},
+	};
+	fx_shapes_t m;
+	char named[192];
+	char styled[192];
+	int err;
+
+	err = pb_tf_parse(&fx_shapes_t_tf, &m, "plain_scalar: 1 opt_scalar: 2 opt_msg {a: 3, b: -4}", NULL);
+	zassert_equal(err, PB_TF_OK);
+
+	ARRAY_FOR_EACH(cases, i) {
+		err = cases[i].wrapper(&fx_shapes_t_tf, &m, named, sizeof(named));
+		zassert_equal(err, PB_TF_OK, "wrapper %zu: %s", i, pb_tf_strerror(err));
+
+		err = pb_tf_print_buf_styled(&fx_shapes_t_tf, &m, styled, sizeof(styled),
+					     cases[i].compact, cases[i].braces);
+		zassert_equal(err, PB_TF_OK, "styled %zu: %s", i, pb_tf_strerror(err));
+
+		zassert_str_equal(named, styled, "wrapper %zu disagrees with styled", i);
+	}
+}
+
+/* The callback form too, through pb_tf_out_buf() rather than the buffered entry. */
+ZTEST(pb_tf_print, test_callback_wrappers_match_styled)
+{
+	fx_shapes_t m;
+	char named[192];
+	char styled[192];
+	struct pb_tf_buf sink;
+	int err;
+
+	err = pb_tf_parse(&fx_shapes_t_tf, &m, "plain_scalar: 1 opt_msg {a: 9}", NULL);
+	zassert_equal(err, PB_TF_OK);
+
+	named[0] = '\0';
+	sink.buf = named;
+	sink.size = sizeof(named);
+	sink.used = 0U;
+	sink.overflow = false;
+	err = pb_tf_print_multiline_braces(&fx_shapes_t_tf, &m, pb_tf_out_buf, &sink);
+	zassert_equal(err, PB_TF_OK, "%s", pb_tf_strerror(err));
+	zassert_false(sink.overflow);
+
+	styled[0] = '\0';
+	sink.buf = styled;
+	sink.size = sizeof(styled);
+	sink.used = 0U;
+	sink.overflow = false;
+	err = pb_tf_print_styled(&fx_shapes_t_tf, &m, pb_tf_out_buf, &sink, false, true);
+	zassert_equal(err, PB_TF_OK, "%s", pb_tf_strerror(err));
+	zassert_false(sink.overflow);
+
+	zassert_str_equal(named, styled);
+}
+
 /* A submessage nests; multi-line indents it, compact keeps it tight. */
 ZTEST(pb_tf_print, test_submessage_style)
 {

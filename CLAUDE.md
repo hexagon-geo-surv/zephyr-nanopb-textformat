@@ -199,8 +199,8 @@ parse-only build therefore works under `CBPRINTF_NANO`, and `tests/split` has a 
 `CBPRINTF_NANO`. Its suites are `#if`-guarded on the options, which is what lets one source file
 build in every combination. Keep it small — field shapes belong in `tests/textformat/`.
 
-`tests/textformat/` is one ztest app, eight suites, run across four `testcase.yaml` configurations.
-The three non-default configs exist so degradation paths are *exercised* rather than merely
+`tests/textformat/` is one ztest app, eight suites, run across five `testcase.yaml` configurations.
+The four non-default configs exist so degradation paths are *exercised* rather than merely
 configured — keep them meaningful:
 
 | Config | Proves |
@@ -305,6 +305,9 @@ function signatures:
 **MAJOR**
 
 - Removing, renaming or re-signaturing any of the six public functions or the two macros.
+- Changing the signature or behaviour of `pb_tf_print_styled()` / `pb_tf_print_buf_styled()`. The eight
+  style wrappers are `static inline` in the header, so **user** object files call these directly and
+  carry the argument order with them — exactly the ABI hazard the struct layouts have below.
 - Changing the layout of `struct pb_tf_field` or `struct pb_tf_msg`. `PB_TF_DEFINE` bakes those structs into
   *user* object files, so a layout change is an ABI break: everything must be recompiled, and a stale
   object file will read garbage rather than fail to link.
@@ -359,8 +362,9 @@ ternary is not `return PB_TF_ERR_A;`, and a test comparing against a positive en
 compiles while always failing.
 
 Internal helpers belong in `src/nanopb_textformat_priv.h`, not the public header — the public API is
-deliberately seven functions (`parse`, `merge`, `print`, `print_buf`, `clear`, `strerror`,
-`out_buf`) plus the `PB_TF_DEFINE` / `PB_TF_DECLARE` macros.
+deliberately small: `parse`, `merge`, `print_styled`, `print_buf_styled`, `clear`, `strerror`,
+`out_buf`, plus the eight `static inline` style wrappers and the `PB_TF_DEFINE` / `PB_TF_DECLARE`
+macros.
 
 **No runtime flags, and no style-agnostic print.** The line style and the braces are in the function
 name -- `pb_tf_print_buf_compact()`, `pb_tf_print_multiline_braces()` and so on, eight in all -- so a
@@ -369,14 +373,27 @@ likewise `pb_tf_parse()` versus `pb_tf_merge()`.
 
 Do not add a `pb_tf_print()` that reads the style from Kconfig: that was the arrangement up to 0.5.0,
 and its problem is that reading a call site tells you nothing about the output. Only
-`_PRINT_SKIP_DEFAULTS` stays Kconfig, because making it per-call would double eight entry points to
-sixteen and no firmware wants it both ways.
+`_PRINT_SKIP_DEFAULTS` stays Kconfig, because making it per-call would mean a third boolean on every
+entry point and no firmware wants it both ways.
 
-Each wrapper is 16-20 bytes on Cortex-M3 and `--gc-sections` drops the ones an application does not
-call, so the count costs nothing. They are deliberately real functions rather than `static inline`:
-inlining would need the two-boolean styled function exposed in the public header, which is the
-unreadable-argument API the naming exists to avoid, and it would buy one branch against the 992 bytes
-`pb_tf_print_styled` spends formatting.
+The eight wrappers are `static inline` in the public header over `pb_tf_print_styled()` /
+`pb_tf_print_buf_styled()`, which are public for a second reason: a caller choosing style at **run
+time** would otherwise need a four-way branch to select a wrapper. `samples/textformat` is that
+caller and is the worked example.
+
+Do not restore them as real functions. As `static inline` they emit nothing of their own, which is
+measured: `print.c` went 1469 -> 1325 bytes when they were inlined, since each was a 16-byte function
+that could not be a tail call -- `pb_tf_print_styled()` takes six arguments and AAPCS passes four in
+registers, so the wrapper had to `push`/`strd` the style pair and therefore keep a frame.
+
+Speed was **not** the reason and should not be claimed as one: inlining removes one `bl`/`pop` pair,
+4-6 cycles, against the ~1000 bytes of formatting a print does. The reasons are the 144 bytes and the
+run-time style choice.
+
+Because the wrappers are inline in the header, nothing links against them, so a wrapper wired to the
+wrong boolean pair still compiles and still prints valid text format -- just the wrong shape.
+`test_wrappers_match_styled` and `test_callback_wrappers_match_styled` compare each wrapper's bytes
+against the explicit call; keep them when adding a style.
 
 `docs/dialect.md` is a contract, not a description. If you change what is accepted or printed, update
 it in the same commit, and keep the guarantee it opens with true: everything accepted is valid text

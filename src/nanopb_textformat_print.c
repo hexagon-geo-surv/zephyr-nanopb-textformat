@@ -602,8 +602,8 @@ static int pb_tf_run_print(struct pb_tf_printer *pr)
 	}
 }
 
-static int pb_tf_print_styled(const struct pb_tf_msg *tf, const void *msg, cbprintf_cb out,
-				      void *ctx, bool compact, bool braces)
+int pb_tf_print_styled(const struct pb_tf_msg *tf, const void *msg, cbprintf_cb out, void *ctx,
+		       bool compact, bool braces)
 {
 	struct pb_tf_printer pr;
 	int err;
@@ -647,8 +647,8 @@ static int pb_tf_print_styled(const struct pb_tf_msg *tf, const void *msg, cbpri
 	return 0;
 }
 
-static int pb_tf_print_buf_styled(const struct pb_tf_msg *tf, const void *msg, char *buf,
-					  size_t size, bool compact, bool braces)
+int pb_tf_print_buf_styled(const struct pb_tf_msg *tf, const void *msg, char *buf, size_t size,
+			   bool compact, bool braces)
 {
 	struct pb_tf_buf sink;
 	int err;
@@ -674,68 +674,4 @@ static int pb_tf_print_buf_styled(const struct pb_tf_msg *tf, const void *msg, c
 	}
 
 	return sink.overflow ? -PB_TF_ERR_NO_SPACE : 0;
-}
-
-/*
- * The public entry points.
- *
- * Each names the output it produces, so a call site is self-describing and a
- * firmware can use more than one shape: multi-line for a person reading a
- * configuration, compact for a line it means to paste back in or log. There is
- * deliberately no style-agnostic pb_tf_print(), because its output would depend
- * on a Kconfig the reader has to go and look up.
- *
- * Zephyr compiles with -ffunction-sections and links with --gc-sections, so a
- * variant an application never calls costs nothing in the final image.
- *
- * CONFIG_NANOPB_TEXTFORMAT_PRINT_SKIP_DEFAULTS stays Kconfig-only on purpose:
- * making it per-call as well would double this list again, and unlike the line
- * style it is not something an application plausibly wants both ways in the
- * same firmware.
- */
-
-int pb_tf_print_compact(const struct pb_tf_msg *tf, const void *msg, cbprintf_cb out, void *ctx)
-{
-	return pb_tf_print_styled(tf, msg, out, ctx, true, false);
-}
-
-int pb_tf_print_multiline(const struct pb_tf_msg *tf, const void *msg, cbprintf_cb out,
-				  void *ctx)
-{
-	return pb_tf_print_styled(tf, msg, out, ctx, false, false);
-}
-
-int pb_tf_print_compact_braces(const struct pb_tf_msg *tf, const void *msg, cbprintf_cb out,
-				       void *ctx)
-{
-	return pb_tf_print_styled(tf, msg, out, ctx, true, true);
-}
-
-int pb_tf_print_multiline_braces(const struct pb_tf_msg *tf, const void *msg, cbprintf_cb out,
-					 void *ctx)
-{
-	return pb_tf_print_styled(tf, msg, out, ctx, false, true);
-}
-
-int pb_tf_print_buf_compact(const struct pb_tf_msg *tf, const void *msg, char *buf, size_t size)
-{
-	return pb_tf_print_buf_styled(tf, msg, buf, size, true, false);
-}
-
-int pb_tf_print_buf_multiline(const struct pb_tf_msg *tf, const void *msg, char *buf,
-				      size_t size)
-{
-	return pb_tf_print_buf_styled(tf, msg, buf, size, false, false);
-}
-
-int pb_tf_print_buf_compact_braces(const struct pb_tf_msg *tf, const void *msg, char *buf,
-					   size_t size)
-{
-	return pb_tf_print_buf_styled(tf, msg, buf, size, true, true);
-}
-
-int pb_tf_print_buf_multiline_braces(const struct pb_tf_msg *tf, const void *msg, char *buf,
-					     size_t size)
-{
-	return pb_tf_print_buf_styled(tf, msg, buf, size, false, true);
 }

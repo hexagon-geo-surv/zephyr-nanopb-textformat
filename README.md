@@ -7,7 +7,7 @@ back out. No heap, no scratch buffers, no recursion.
 
 > **Experimental: 0.x, and the API can change.**
 >
-> Three of the six releases so far removed something — 0.3.0 deleted the runtime flag arguments,
+> Three of the seven releases so far removed something — 0.3.0 deleted the runtime flag arguments,
 > 0.4.0 deleted a Kconfig snippet, 0.6.0 replaced the print functions and dropped the typedefs.
 > All minor bumps, which is what semver means by 0.x.
 > **Pin a tag**, and read the release notes before moving it. [Versioning](#versioning) says what is
@@ -72,7 +72,7 @@ manifest:
   projects:
     - name: zephyr-nanopb-textformat
       remote: rodrigopex
-      revision: v0.6.0
+      revision: v0.7.0
       path: modules/lib/zephyr-nanopb-textformat
 ```
 
@@ -184,6 +184,10 @@ int pb_tf_print_compact         (tf, msg, cbprintf_cb out, void *ctx);
 int pb_tf_print_multiline_braces(tf, msg, cbprintf_cb out, void *ctx);
 int pb_tf_print_compact_braces  (tf, msg, cbprintf_cb out, void *ctx);
 
+/* ...and the same two, with the style given explicitly, for a run-time choice */
+int pb_tf_print_buf_styled(tf, msg, char *buf, size_t size, bool compact, bool braces);
+int pb_tf_print_styled(tf, msg, cbprintf_cb out, void *ctx, bool compact, bool braces);
+
 void        pb_tf_clear(const struct pb_tf_msg *tf, void *msg);
 const char *pb_tf_strerror(int err);
 int         pb_tf_out_buf(int c, void *ctx);   /* a bundled cbprintf_cb */
@@ -199,19 +203,24 @@ says what it produces, and one firmware can use more than one shape — multi-li
 a configuration, compact for a line it means to paste back in or log. There is deliberately no
 style-agnostic `pb_tf_print()`: its output would depend on a setting the reader has to go and look up.
 
-Zephyr compiles with `-ffunction-sections` and links with `--gc-sections`, so a variant your
-application never calls costs nothing in the final image. Each is 16–20 bytes on Cortex-M3 when it
-is used.
+The eight named forms are `static inline` wrappers in the header over `pb_tf_print_styled()` and
+`pb_tf_print_buf_styled()`, so they generate no function of their own — the call site materialises
+the two style arguments and calls straight through. Having four shapes each therefore costs nothing,
+whether or not you use them.
+
+Use the explicit form when the style is a **run-time** choice, where the alternative is a four-way
+branch to pick a wrapper. The sample's `cfg get [compact] [braces]` is exactly that case. Prefer a
+named wrapper everywhere else: two bare booleans at a call site say nothing about what comes out.
 
 Either half is optional: `CONFIG_NANOPB_TEXTFORMAT_PARSE=n` drops the two parsing functions,
-`CONFIG_NANOPB_TEXTFORMAT_PRINT=n` drops the eight printing ones. Both default to `y`, and
+`CONFIG_NANOPB_TEXTFORMAT_PRINT=n` drops the printing ones. Both default to `y`, and
 `pb_tf_clear()`, `pb_tf_strerror()` and `pb_tf_out_buf()` are always present. See [Cost](#cost) for
 what each saves.
 
 One print modifier stays a build option: `CONFIG_NANOPB_TEXTFORMAT_PRINT_SKIP_DEFAULTS` omits
 implicit-presence fields that are still zero. It is Kconfig rather than per-call because, unlike the
 line style, it is not something one firmware plausibly wants both ways — and making it per-call would
-double the eight entry points to sixteen. Print-all is the default, so a printed message shows every
+add a third boolean to every entry point. Print-all is the default, so a printed message shows every
 field and round-trips byte-exact into a cleared struct.
 
 Prefer the `pb_tf_print_buf_*` forms over `pb_tf_print_*` + `pb_tf_out_buf()`. They terminate the buffer even
@@ -251,9 +260,9 @@ All figures measured on `mps2/an385` (Cortex-M3) at `-Os`, reproducible with `ju
 
 | | |
 |---|---|
-| Library code | **4970 B** — common 466, parse 3317, print 1187 |
-| print only (`PARSE=n`) | **1653 B** — drops 67% |
-| parse only (`PRINT=n`) | **3783 B** — drops 24% |
+| Library code | **5116 B** — common 474, parse 3317, print 1325 |
+| print only (`PARSE=n`) | **1799 B** — drops 65% |
+| parse only (`PRINT=n`) | **3791 B** — drops 26% |
 | with `FLOAT=n` | about 570 B less again |
 | Per message descriptor | `12 × (fields + 1) + 12` bytes, plus the field names as strings |
 
@@ -294,7 +303,7 @@ and 16 for the printer, on top of a fixed frame. Measured:
 | `MAX_DEPTH` | parsing | printing |
 |---|---|---|
 | 1 | 160 B | 144 B |
-| **8 (default)** | **304 B** | **264 B** |
+| **8 (default)** | **304 B** | **256 B** |
 | 32 (maximum) | 792 B | 648 B |
 
 Add ~60 B for the deepest leaf helper. Budget **about 400 bytes** for a call into the library at the
@@ -314,10 +323,10 @@ The sample — Zephyr, the shell, nanopb and this library — on `mps2/an385`:
 
 | | Flash | RAM |
 |---|---|---|
-| `FLOAT=y` (default) | 56 772 B | 11 712 B |
-| `FLOAT=n` | 48 584 B | 11 712 B |
+| `FLOAT=y` (default) | 58 876 B | 12 166 B |
+| `FLOAT=n` | 50 692 B | 12 166 B |
 
-Turning floats off saved 8.2 KB of flash here and **no RAM**, because what it removes is `strtod()`
+Turning floats off saved 8.0 KB of flash here and **no RAM**, because what it removes is `strtod()`
 and cbprintf's floating-point formatting. Expect somewhere between 8 and 12 KB depending on how much
 of that your firmware already pulls in for other reasons — if something else already formats floats,
 you save less.
@@ -383,13 +392,13 @@ that guide used to recommend and no longer does.
 | `NANOPB_TEXTFORMAT_MAX_DEPTH` | `8` | Submessage nesting limit, range 1–32. Costs 20 bytes of stack per level |
 | `NANOPB_TEXTFORMAT_PRINT_SKIP_DEFAULTS` | `n` | Omit implicit-presence fields that are still zero |
 | `NANOPB_TEXTFORMAT_PARSE` | `y` | Build the two parsing functions. `n` drops 3317 B |
-| `NANOPB_TEXTFORMAT_PRINT` | `y` | Build the eight printing functions. `n` drops ~1330 B |
+| `NANOPB_TEXTFORMAT_PRINT` | `y` | Build the printer. `n` drops 1325 B |
 
 ### cbprintf
 
-The printer casts every integer to `long long` and prints `%lld`/`%llu`, so it needs
-`CONFIG_CBPRINTF_COMPLETE=y` and `CONFIG_CBPRINTF_FULL_INTEGRAL=y` for **all** integer fields, not
-only 64-bit ones.
+The printer needs `CONFIG_CBPRINTF_COMPLETE=y`, for the `%o` conversion the three-digit octal
+escapes are written with. `CONFIG_CBPRINTF_FULL_INTEGRAL=y` it needs only for fields wider than 32
+bits: everything narrower is printed through `PRId32`/`PRIu32`.
 
 Both are already Zephyr's defaults, so normally there is nothing to do. They are also Kconfig
 *choice* members, which means this module cannot `select` them — `CONFIG_NANOPB_TEXTFORMAT_PRINT`
@@ -401,9 +410,10 @@ build has no need of it and works under `CBPRINTF_NANO`.
 
 ## Tests
 
-`tests/textformat/` is one ztest application, run under twister on two QEMU targets across four
-configurations — the defaults, `FLOAT=n`, `NANOPB_WITHOUT_64BIT=y`, and `MAX_DEPTH=1`. The last three
-exist so that the degradation paths are exercised rather than merely configured.
+`tests/textformat/` is one ztest application, run under twister on two QEMU targets across five
+configurations — the defaults, `FLOAT=n`, `NANOPB_WITHOUT_64BIT=y`, `CBPRINTF_REDUCED_INTEGRAL=y`,
+and `MAX_DEPTH=1`. The last four exist so that the degradation paths are exercised rather than merely
+configured.
 
 ```sh
 west twister -T tests -p mps2/an385 -p qemu_x86 --inline-logs
@@ -455,11 +465,12 @@ forced it.
 
 ## Versioning
 
-[Semantic versioning](https://semver.org). The current version is **0.6.0**.
+[Semantic versioning](https://semver.org). The current version is **0.7.0**.
 
 **Major is 0, and that is meant literally: the API can change, and has.** Not because the library is
-unfinished — it is feature-complete against its design, with 1722 test cases across 16
-configurations on two boards plus native_sim — but because it is young enough that better shapes keep
+unfinished — it is feature-complete against its design, with 1104 test cases across 18
+configurations on two boards, plus 552 more on native_sim under glibc — but because it is young
+enough that better shapes keep
 turning up, usually from someone integrating it:
 
 | | |
@@ -469,6 +480,7 @@ turning up, usually from someone integrating it:
 | 0.4.0 | **removed** a Kconfig snippet, and withdrew advice to disable shell wildcards |
 | 0.5.0 | added `PARSE` / `PRINT`, so either half can be left out (both still default `y`) |
 | 0.6.0 | **replaced** the print functions with eight style-named ones, **removed** the `_t` typedefs, and switched to `int` returns |
+| 0.7.0 | added `pb_tf_print_styled()` / `pb_tf_print_buf_styled()` for a run-time style choice; the eight named forms became `static inline` wrappers over them |
 
 Both removals were minor bumps. That is correct semver for 0.x — a breaking change does not force a
 major bump until 1.0 — but it does mean **`revision: main` will eventually break your build**. Pin a

@@ -198,6 +198,16 @@ static int cmd_get_config(const struct shell *sh, size_t argc, char **argv)
 }
 ```
 
+If the style is a **run-time** choice — a command offering `get [compact] [braces]` — call
+`pb_tf_print_buf_styled()` and pass the two flags, rather than branching four ways to pick a wrapper:
+
+```c
+err = pb_tf_print_buf_styled(&ui_config_t_tf, &cfg, text, sizeof(text), compact, braces);
+```
+
+`samples/textformat` does exactly this. Where a call site knows its style, name it — two bare
+booleans say nothing about what comes out.
+
 To stream straight to the shell with no intermediate buffer at all, pass your own `cbprintf_cb`:
 
 ```c
@@ -266,7 +276,7 @@ rather than a function of the input. Measured on Cortex-M3 at `-Os`:
 | | Stack |
 |---|---|
 | `pb_tf_parse()` | `132 + 20n` bytes, where *n* is `CONFIG_NANOPB_TEXTFORMAT_MAX_DEPTH` — 296 B at the default 8 |
-| `pb_tf_print()` | 264 B |
+| `pb_tf_print_styled()` | 256 B |
 
 The shell thread gets **2048 bytes** by default (`CONFIG_SHELL_STACK_SIZE`), so the default depth
 leaves comfortable room. Raising `MAX_DEPTH` is linear and visible in a single `-fstack-usage` line;

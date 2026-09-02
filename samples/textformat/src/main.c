@@ -121,24 +121,17 @@ static int cmd_get(const struct shell *sh, size_t argc, char **argv)
 	}
 
 	/*
-	 * The style is named by the function, so this command can offer both --
-	 * multi-line for reading, compact for a line to paste back in. Only the
-	 * variants actually called are linked, since Zephyr builds with
-	 * -ffunction-sections and links with --gc-sections.
+	 * The style is a run-time choice here, so this calls pb_tf_print_buf_styled()
+	 * rather than one of the four style-named wrappers -- which would mean a
+	 * four-way branch to pick between them. A call site that knows its style
+	 * should name it: pb_tf_print_buf_compact(&Config_tf, &cfg, text, sizeof(text)).
 	 *
 	 * pb_tf_print_buf_* rather than pb_tf_print_* with pb_tf_out_buf: the
 	 * buffered form terminates even when nothing is printed -- an all-default
 	 * message under SKIP_DEFAULTS prints nothing at all -- and reports
 	 * truncation instead of setting a flag the caller must remember to check.
 	 */
-	if (compact) {
-		err = braces ? pb_tf_print_buf_compact_braces(&Config_tf, &cfg, text, sizeof(text))
-			     : pb_tf_print_buf_compact(&Config_tf, &cfg, text, sizeof(text));
-	} else {
-		err = braces
-			      ? pb_tf_print_buf_multiline_braces(&Config_tf, &cfg, text, sizeof(text))
-			      : pb_tf_print_buf_multiline(&Config_tf, &cfg, text, sizeof(text));
-	}
+	err = pb_tf_print_buf_styled(&Config_tf, &cfg, text, sizeof(text), compact, braces);
 
 	if (err != 0) {
 		shell_error(sh, "print: %s", pb_tf_strerror(err));
