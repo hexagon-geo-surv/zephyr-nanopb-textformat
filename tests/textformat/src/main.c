@@ -328,12 +328,9 @@ ZTEST(pb_tf_macro, test_strerror_covers_every_code)
 
 /*
  * ===========================================================================
- * Milestone 2: lexer and scalar parsing.
+ * Parsing: the lexer, field shapes, and integer and bool values.
  *
- * Everything here is field shapes and integer/bool values. Submessages
- * (milestone 3), strings and bytes (milestone 4) and floats (milestone 6) get
- * their own suites; where their current answer is already final -- a float
- * field under CONFIG_NANOPB_TEXTFORMAT_FLOAT=n -- it is asserted below.
+ * Submessages, strings and bytes, and floats each have their own suite below.
  * ===========================================================================
  */
 
@@ -693,8 +690,7 @@ ZTEST(pb_tf_parse, test_float_field_follows_the_build)
 
 /*
  * ===========================================================================
- * The error table: every code reachable from milestone 2, with its offset and
- * field name.
+ * The error table: each code, with the offset and field name it reports.
  * ===========================================================================
  */
 
@@ -2216,8 +2212,9 @@ ZTEST(pb_tf_float, test_nan_round_trips)
 }
 
 /*
- * The whole of fx_scalars, which milestone 5 could not round-trip because the
- * float fields had no parse side. Every ltype in one message, both directions.
+ * The whole of fx_scalars: a field of every ltype in one message, both
+ * directions. It lives in the float suite because the float fields are what
+ * make it need a build that can represent everything -- see SCALARS_PRINTABLE.
  */
 ZTEST(pb_tf_float, test_full_scalars_round_trip)
 {
