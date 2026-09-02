@@ -23,6 +23,27 @@ threshold: 500
 [nanopb]: https://jpa.kapsi.fi/nanopb/
 [zephyr]: https://zephyrproject.org/
 
+## What it does
+
+Two directions, over a struct nanopb already generated for you:
+
+- **Parse** a text-format message from a string straight into the struct —
+  `delay: 100, path: [{x: 1, y: 2}]`.
+- **Print** the struct back out as text format, in a style chosen at build time.
+
+It covers every field shape nanopb emits under `STATIC` allocation: singular, optional and repeated
+scalars, submessages, repeated submessages, oneof (named and anonymous), strings, bytes,
+fixed-length bytes, numeric enums and floats — in proto2 and proto3, under either nanopb naming
+style. Shapes it cannot represent (`POINTER`, `CALLBACK`, `FIXARRAY`) report a runtime error instead
+of breaking the build, so one awkward field cannot stop a message from compiling.
+
+Values are written straight into your struct: no heap, no scratch buffer, and neither direction
+recurses. It is a Zephyr module, so adopting it is a west manifest entry and two Kconfig lines.
+
+What it is **not** is a wire-format codec. Encoding and decoding protobuf binary is nanopb's job;
+this sits alongside it and only deals with the text representation, for the cases where a human types
+or reads the message.
+
 ## Why
 
 nanopb descriptors carry **no field names** — not `pb_msgdesc_t`, not the generated `.pb.c`. So the
