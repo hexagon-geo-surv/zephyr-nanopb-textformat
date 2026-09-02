@@ -1,0 +1,14 @@
+// A deliberately small message: this suite is about which half of the library
+// got built, not about field shapes. tests/textformat/ covers those.
+syntax = "proto3";
+
+message SplitInner {
+  int32 v = 1;
+}
+
+message Split {
+  uint32 a = 1;
+  repeated uint32 b = 2;
+  SplitInner sub = 3;
+  string name = 4;
+}

@@ -4,12 +4,6 @@
 config NANOPB_TEXTFORMAT
 	bool "Protobuf text format for nanopb messages"
 	depends on NANOPB
-	# A hard requirement, not a preference. The printer escapes non-printable
-	# bytes as three-digit octal, and CBPRINTF_NANO has no %o conversion at all
-	# -- it emits "\12" where "\012" is required, which re-parses wrongly
-	# whenever the next byte is a digit. Depending on the choice member is the
-	# only way to say this in Kconfig; it cannot be selected.
-	depends on CBPRINTF_COMPLETE
 	help
 	  Parse a subset of the protobuf text format
 	  (https://protobuf.dev/reference/protobuf/textformat-spec/) directly
@@ -24,13 +18,46 @@ config NANOPB_TEXTFORMAT
 
 if NANOPB_TEXTFORMAT
 
+config NANOPB_TEXTFORMAT_PARSE
+	bool "Parse text format into a struct"
+	default y
+	help
+	  Build pb_tf_parse() and pb_tf_merge().
+
+	  Turn this off for a firmware that only ever prints -- reporting a
+	  configuration, say, without accepting one. The parser is the larger half
+	  by some margin, so this is the bigger of the two savings.
+
+	  With this off, the two functions are not declared, so a call to either is
+	  a compile error naming the function rather than a link failure.
+
+config NANOPB_TEXTFORMAT_PRINT
+	bool "Print a struct as text format"
+	default y
+	# The printer's requirement, not the module's: it escapes non-printable
+	# bytes as three-digit octal, and CBPRINTF_NANO has no %o conversion at all
+	# -- it emits "\12" where "\012" is required, which re-parses wrongly
+	# whenever the next byte is a digit. Depending on the choice member is the
+	# only way to say this in Kconfig; it cannot be selected. A parse-only
+	# build has no such need and works under CBPRINTF_NANO.
+	depends on CBPRINTF_COMPLETE
+	help
+	  Build pb_tf_print() and pb_tf_print_buf().
+
+	  Turn this off for a firmware that only ever accepts a message -- applying
+	  a configuration without reporting one back.
+
+	  With this off, the two functions are not declared, so a call to either is
+	  a compile error naming the function rather than a link failure.
+
 config NANOPB_TEXTFORMAT_FLOAT
 	bool "Parse and print float and double fields"
 	default y
 	depends on !MINIMAL_LIBC
-	# Sound because the whole module already depends on CBPRINTF_COMPLETE,
-	# which is what CBPRINTF_FP_SUPPORT itself requires.
-	select CBPRINTF_FP_SUPPORT
+	# Only the printer needs floating-point formatting, and CBPRINTF_PRINT
+	# already carries the CBPRINTF_COMPLETE dependency that FP_SUPPORT itself
+	# requires. Parsing a float needs strtod() instead, hence !MINIMAL_LIBC.
+	select CBPRINTF_FP_SUPPORT if NANOPB_TEXTFORMAT_PRINT
 	help
 	  Enable float/double support. Parsing needs strtod(), which the minimal
 	  libc does not provide, hence the dependency. Printing needs
@@ -53,6 +80,7 @@ config NANOPB_TEXTFORMAT_FLOAT
 
 choice NANOPB_TEXTFORMAT_PRINT_STYLE
 	prompt "Printed output style"
+	depends on NANOPB_TEXTFORMAT_PRINT
 	default NANOPB_TEXTFORMAT_PRINT_MULTILINE
 
 config NANOPB_TEXTFORMAT_PRINT_MULTILINE
@@ -74,6 +102,7 @@ endchoice
 
 config NANOPB_TEXTFORMAT_PRINT_BRACES
 	bool "Wrap printed output in braces"
+	depends on NANOPB_TEXTFORMAT_PRINT
 	help
 	  Emit the whole message inside { }. Off by default, because without them
 	  the output is valid standalone text format that protoc will parse as-is;
@@ -83,6 +112,7 @@ config NANOPB_TEXTFORMAT_PRINT_BRACES
 
 config NANOPB_TEXTFORMAT_PRINT_SKIP_DEFAULTS
 	bool "Omit implicit-presence fields that are still zero"
+	depends on NANOPB_TEXTFORMAT_PRINT
 	help
 	  Leave out singular and required fields whose value is the type's
 	  default, as protoc's own printer does.

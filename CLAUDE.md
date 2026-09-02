@@ -176,7 +176,28 @@ sized for a keyboard — anything pasted or piped past that is dropped, silently
 sees it. The sample raises it in its own prj.conf, and pacing then only matters for reading the
 transcript.
 
+## Either half can be left out
+
+`CONFIG_NANOPB_TEXTFORMAT_PARSE` and `_PRINT` each drop half the library, for a firmware that only
+accepts a configuration or only reports one. `common.c` (descriptor lookup, `pb_tf_clear`,
+`pb_tf_strerror`, `pb_tf_out_buf`) is always built.
+
+The split is clean because neither half calls the other — keep it that way. `CMakeLists.txt` selects
+the sources with `zephyr_library_sources_ifdef`, and the public header guards the four declarations,
+so calling into a configured-out half is a compile error naming the function rather than a link
+failure. Measured: 4970 B for both, 1653 print-only, 3783 parse-only, and
+`common + half` matches each exactly.
+
+One consequence worth preserving: **the `CBPRINTF_COMPLETE` requirement belongs to
+`_PRINT`, not to the module.** Only `print.c` touches cbprintf, and the requirement exists because
+`CBPRINTF_NANO` has no `%o` conversion, so the three-digit octal escape comes out as `"\12"`. A
+parse-only build therefore works under `CBPRINTF_NANO`, and `tests/split` has a scenario proving it.
+
 ## Tests
+
+`tests/split/` covers the four combinations of those two options, including parse-only under
+`CBPRINTF_NANO`. Its suites are `#if`-guarded on the options, which is what lets one source file
+build in every combination. Keep it small — field shapes belong in `tests/textformat/`.
 
 `tests/textformat/` is one ztest app, eight suites, run across four `testcase.yaml` configurations.
 The three non-default configs exist so degradation paths are *exercised* rather than merely

@@ -1,0 +1,31 @@
+common:
+  tags: nanopb textformat
+  harness: ztest
+  timeout: 60
+  platform_allow:
+    - mps2/an385
+    - qemu_x86
+    - native_sim
+    - native_sim/native/64
+
+tests:
+  # Both halves, so the guarded suites are exercised together as well.
+  nanopb_textformat.split.both: {}
+
+  # Print only. A firmware that reports a configuration without accepting one.
+  nanopb_textformat.split.print_only:
+    extra_configs:
+      - CONFIG_NANOPB_TEXTFORMAT_PARSE=n
+
+  # Parse only. A firmware that accepts a configuration without reporting one.
+  nanopb_textformat.split.parse_only:
+    extra_configs:
+      - CONFIG_NANOPB_TEXTFORMAT_PRINT=n
+
+  # Parse only under CBPRINTF_NANO, which the full module cannot use: the %o
+  # escape requirement belongs to the printer, so dropping the printer drops the
+  # requirement. This is what makes moving that dependency worth having.
+  nanopb_textformat.split.parse_only_nano:
+    extra_configs:
+      - CONFIG_NANOPB_TEXTFORMAT_PRINT=n
+      - CONFIG_CBPRINTF_NANO=y

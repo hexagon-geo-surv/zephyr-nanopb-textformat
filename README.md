@@ -7,7 +7,7 @@ back out. No heap, no scratch buffers, no recursion.
 
 > **Experimental: 0.x, and the API can change.**
 >
-> Two of the four releases so far removed something — 0.3.0 deleted the runtime flag arguments,
+> Two of the five releases so far removed something — 0.3.0 deleted the runtime flag arguments,
 > 0.4.0 deleted a Kconfig snippet. Both were minor bumps, which is what semver means by 0.x.
 > **Pin a tag**, and read the release notes before moving it. [Versioning](#versioning) says what is
 > more settled and what is less.
@@ -71,7 +71,7 @@ manifest:
   projects:
     - name: zephyr-nanopb-textformat
       remote: rodrigopex
-      revision: v0.4.0
+      revision: v0.5.0
       path: modules/lib/zephyr-nanopb-textformat
 ```
 
@@ -178,6 +178,10 @@ const char *pb_tf_strerror(pb_tf_err_t code);
 int         pb_tf_out_buf(int c, void *ctx);   /* a bundled cbprintf_cb */
 ```
 
+Either half is optional: `CONFIG_NANOPB_TEXTFORMAT_PARSE=n` drops the first two functions,
+`CONFIG_NANOPB_TEXTFORMAT_PRINT=n` drops the next two. Both default to `y`, and `pb_tf_clear()`,
+`pb_tf_strerror()` and `pb_tf_out_buf()` are always present. See [Cost](#cost) for what each saves.
+
 **There are no runtime flags.** Output style is a Kconfig choice, so a firmware states it once
 rather than at every call site, and the unused branches are not compiled:
 
@@ -228,9 +232,17 @@ All figures measured on `mps2/an385` (Cortex-M3) at `-Os`, reproducible with `ju
 
 | | |
 |---|---|
-| Library code | **5132 B** — parse, print and common combined |
-| with `FLOAT=n` | **4566 B** (−566 B of library code) |
+| Library code | **4970 B** — common 466, parse 3317, print 1187 |
+| print only (`PARSE=n`) | **1653 B** — drops 67% |
+| parse only (`PRINT=n`) | **3783 B** — drops 24% |
+| with `FLOAT=n` | about 570 B less again |
 | Per message descriptor | `12 × (fields + 1) + 12` bytes, plus the field names as strings |
+
+Either direction can be left out with `CONFIG_NANOPB_TEXTFORMAT_PARSE=n` or `_PRINT=n`. They are
+independent — neither calls the other — so a firmware that only reports a configuration pays for the
+printer alone, and one that only accepts a configuration pays for the parser alone. The declarations
+are guarded on those options, so calling into a half you configured out is a compile error naming the
+function rather than a link failure later.
 
 The descriptor is `const`, so it lives in flash, not RAM. Two worked examples from the sample:
 
@@ -352,6 +364,8 @@ that guide used to recommend and no longer does.
 | `NANOPB_TEXTFORMAT_FLOAT` | `y` | Float and double support. `depends on !MINIMAL_LIBC` (needs `strtod`) and selects `CBPRINTF_FP_SUPPORT`. `n` makes float fields report `PB_TF_ERR_NO_FLOAT` in both directions and saves 8–12 KB of flash, depending on what else in the image formats floats |
 | `NANOPB_TEXTFORMAT_MAX_DEPTH` | `8` | Submessage nesting limit, range 1–32. Costs 20 bytes of stack per level |
 | `NANOPB_TEXTFORMAT_PRINT_*` | multi-line | Output style; see [API](#api) |
+| `NANOPB_TEXTFORMAT_PARSE` | `y` | Build `pb_tf_parse()` / `pb_tf_merge()`. `n` drops 3317 B |
+| `NANOPB_TEXTFORMAT_PRINT` | `y` | Build `pb_tf_print()` / `pb_tf_print_buf()`. `n` drops 1187 B |
 
 ### cbprintf
 
@@ -360,9 +374,12 @@ The printer casts every integer to `long long` and prints `%lld`/`%llu`, so it n
 only 64-bit ones.
 
 Both are already Zephyr's defaults, so normally there is nothing to do. They are also Kconfig
-*choice* members, which means this module cannot `select` them — so instead it `BUILD_ASSERT`s on
-them, and a project that deliberately opted out gets a build error naming the symbol rather than
-silently wrong numbers.
+*choice* members, which means this module cannot `select` them — `CONFIG_NANOPB_TEXTFORMAT_PRINT`
+therefore `depends on CBPRINTF_COMPLETE`, and a genuine 64-bit field reports
+`PB_TF_ERR_UNSUPPORTED` rather than printing wrong numbers if full integral conversion is missing.
+
+Note that requirement belongs to the *printer*, not the module: a `CONFIG_NANOPB_TEXTFORMAT_PRINT=n`
+build has no need of it and works under `CBPRINTF_NANO`.
 
 ## Tests
 
@@ -420,7 +437,7 @@ forced it.
 
 ## Versioning
 
-[Semantic versioning](https://semver.org). The current version is **0.4.0**.
+[Semantic versioning](https://semver.org). The current version is **0.5.0**.
 
 **Major is 0, and that is meant literally: the API can change, and has.** Not because the library is
 unfinished — it is feature-complete against its design, with 1722 test cases across 16
@@ -432,6 +449,7 @@ turning up, usually from someone integrating it:
 | 0.1.1 | fixed a build failure on `native_sim` that no cross target could catch |
 | 0.3.0 | **removed** the runtime `flags` arguments in favour of Kconfig |
 | 0.4.0 | **removed** a Kconfig snippet, and withdrew advice to disable shell wildcards |
+| 0.5.0 | added `PARSE` / `PRINT`, so either half can be left out (both still default `y`) |
 
 Both removals were minor bumps. That is correct semver for 0.x — a breaking change does not force a
 major bump until 1.0 — but it does mean **`revision: main` will eventually break your build**. Pin a

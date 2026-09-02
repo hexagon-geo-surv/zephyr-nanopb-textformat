@@ -50,10 +50,10 @@ extern "C" {
  */
 /**@{*/
 #define NANOPB_TEXTFORMAT_VERSION_MAJOR 0
-#define NANOPB_TEXTFORMAT_VERSION_MINOR 4
+#define NANOPB_TEXTFORMAT_VERSION_MINOR 5
 #define NANOPB_TEXTFORMAT_VERSION_PATCH 0
 
-#define NANOPB_TEXTFORMAT_VERSION_STRING "0.4.0"
+#define NANOPB_TEXTFORMAT_VERSION_STRING "0.5.0"
 
 /**
  * @brief Version as @c 0xMMmmpp, for comparison.
@@ -209,6 +209,15 @@ typedef struct pb_tf_status pb_tf_status_t;
  *   CONFIG_NANOPB_TEXTFORMAT_PRINT_SKIP_DEFAULTS
  *
  * and pb_tf_parse() versus pb_tf_merge().
+ *
+ * Either direction can also be left out entirely:
+ *
+ *   CONFIG_NANOPB_TEXTFORMAT_PARSE   pb_tf_parse(), pb_tf_merge()
+ *   CONFIG_NANOPB_TEXTFORMAT_PRINT   pb_tf_print(), pb_tf_print_buf()
+ *
+ * Both default to y. The declarations below are guarded on them, so calling
+ * into a half that was configured out is a compile error naming the function
+ * rather than a link failure much later.
  */
 
 /**
@@ -224,6 +233,7 @@ typedef struct pb_tf_status pb_tf_status_t;
  *
  * @return PB_TF_OK, or the first error encountered.
  */
+#if defined(CONFIG_NANOPB_TEXTFORMAT_PARSE)
 pb_tf_err_t pb_tf_parse(const pb_tf_msg_t *tf, void *msg, const char *text,
 			pb_tf_status_t *status);
 
@@ -239,6 +249,7 @@ pb_tf_err_t pb_tf_parse(const pb_tf_msg_t *tf, void *msg, const char *text,
  */
 pb_tf_err_t pb_tf_merge(const pb_tf_msg_t *tf, void *msg, const char *text,
 			pb_tf_status_t *status);
+#endif /* CONFIG_NANOPB_TEXTFORMAT_PARSE */
 
 /**
  * @brief Print a nanopb struct as text format.
@@ -256,7 +267,9 @@ pb_tf_err_t pb_tf_merge(const pb_tf_msg_t *tf, void *msg, const char *text,
  *
  * @return PB_TF_OK, or the first error encountered.
  */
+#if defined(CONFIG_NANOPB_TEXTFORMAT_PRINT)
 pb_tf_err_t pb_tf_print(const pb_tf_msg_t *tf, const void *msg, cbprintf_cb out, void *ctx);
+#endif
 
 /** @brief Zero a message, the way pb_tf_parse() does by default. */
 void pb_tf_clear(const pb_tf_msg_t *tf, void *msg);
@@ -320,7 +333,9 @@ int pb_tf_out_buf(int c, void *ctx);
  * @return PB_TF_OK, @c PB_TF_ERR_NO_SPACE if the output was truncated, or the
  *         first print error.
  */
+#if defined(CONFIG_NANOPB_TEXTFORMAT_PRINT)
 pb_tf_err_t pb_tf_print_buf(const pb_tf_msg_t *tf, const void *msg, char *buf, size_t size);
+#endif
 
 /*
  * ---------------------------------------------------------------------------
