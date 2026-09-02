@@ -190,6 +190,13 @@ configured — keep them meaningful:
 | `nofloat` | `FLOAT=n` degrades cleanly in both directions |
 | `no64` | genuine 8-byte fields degrade cleanly (they do **not** narrow) |
 | `shallow` | `MAX_DEPTH=1` actually reaches `PB_TF_ERR_DEPTH` |
+| `compact`, `braces`, `skipdefaults` | each printed style, since one build prints one way |
+| `reduced` | `CBPRINTF_REDUCED_INTEGRAL` — narrow fields still print, 64-bit ones degrade |
+
+Note `fx_scalars` carries a field of every ltype, so printing it needs a build that can represent
+all of them. Tests that print it guard on `SCALARS_PRINTABLE`; several used to pass under `nofloat`
+and `no64` only because they asked for `SKIP_DEFAULTS`, which quietly omitted the zero float and
+64-bit fields. Print-all is the default now, so those fields are reached.
 
 ### native_sim is not optional
 
@@ -250,8 +257,9 @@ This project follows **semantic versioning** (https://semver.org).
 matching annotated git tag `vX.Y.Z`; a test asserts the string and the numbers agree, so they cannot
 drift.
 
-While major is 0, the API may still change — but classify every change anyway, so the eventual 1.0 is
-a real promise rather than a guess.
+While major is 0, the API may still change, and a breaking change is a **minor** bump rather than a
+major one — that is what semver says 0.x means. Classify every change anyway, so the eventual 1.0 is
+a real promise rather than a guess, and say plainly in the release notes when something breaks.
 
 What counts as breaking here is not obvious, because three of this library's contracts are not
 function signatures:
@@ -300,8 +308,18 @@ All public symbols are `pb_tf_*` / `PB_TF_*`; the Kconfig namespace is `NANOPB_T
 module is `nanopb_textformat` and the header `nanopb_textformat.h`.
 
 Internal helpers belong in `src/nanopb_textformat_priv.h`, not the public header — the public API is
-deliberately six functions (`parse`, `print`, `print_buf`, `clear`, `strerror`, `out_buf`) plus the
-`PB_TF_DEFINE` / `PB_TF_DECLARE` macros.
+deliberately seven functions (`parse`, `merge`, `print`, `print_buf`, `clear`, `strerror`,
+`out_buf`) plus the `PB_TF_DEFINE` / `PB_TF_DECLARE` macros.
+
+**There are no runtime flags, and do not reintroduce any.** Output style is a Kconfig choice
+(`NANOPB_TEXTFORMAT_PRINT_MULTILINE` / `_COMPACT`, plus `_BRACES` and `_SKIP_DEFAULTS`), read through
+`IS_ENABLED` so the unused branch is discarded; replace-versus-merge is `pb_tf_parse()` versus
+`pb_tf_merge()`. A build states its intent once instead of at every call site.
+
+The consequence for tests: a single build can only print one way, so style-dependent assertions
+either check substrings (holding in every configuration) or pick their expected string from
+`IS_ENABLED`, and `testcase.yaml` runs the style combinations as separate scenarios. Adding a style
+option means adding a scenario, or it is untested.
 
 `docs/dialect.md` is a contract, not a description. If you change what is accepted or printed, update
 it in the same commit, and keep the guarantee it opens with true: everything accepted is valid text

@@ -1423,8 +1423,9 @@ static pb_tf_err_t pb_tf_run(struct pb_tf_parser *ps)
 	}
 }
 
-pb_tf_err_t pb_tf_parse(const pb_tf_msg_t *tf, void *msg, const char *text, unsigned int flags,
-			pb_tf_status_t *status)
+/** Shared by pb_tf_parse() and pb_tf_merge(), which differ only in @p clear. */
+static pb_tf_err_t pb_tf_parse_into(const pb_tf_msg_t *tf, void *msg, const char *text, bool clear,
+				    pb_tf_status_t *status)
 {
 	struct pb_tf_parser ps;
 	struct pb_tf_frame *base;
@@ -1448,7 +1449,7 @@ pb_tf_err_t pb_tf_parse(const pb_tf_msg_t *tf, void *msg, const char *text, unsi
 	ps.status = status;
 	ps.top = 0U;
 
-	if ((flags & PB_TF_NOINIT) == 0U) {
+	if (clear) {
 		pb_tf_clear(tf, msg);
 	}
 
@@ -1485,4 +1486,16 @@ pb_tf_err_t pb_tf_parse(const pb_tf_msg_t *tf, void *msg, const char *text, unsi
 	}
 
 	return PB_TF_OK;
+}
+
+pb_tf_err_t pb_tf_parse(const pb_tf_msg_t *tf, void *msg, const char *text,
+			pb_tf_status_t *status)
+{
+	return pb_tf_parse_into(tf, msg, text, true, status);
+}
+
+pb_tf_err_t pb_tf_merge(const pb_tf_msg_t *tf, void *msg, const char *text,
+			pb_tf_status_t *status)
+{
+	return pb_tf_parse_into(tf, msg, text, false, status);
 }

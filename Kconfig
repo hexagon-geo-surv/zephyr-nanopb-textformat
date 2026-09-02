@@ -51,6 +51,47 @@ config NANOPB_TEXTFORMAT_FLOAT
 	  so only fields wider than 32 bits depend on it, and such a field reports
 	  PB_TF_ERR_UNSUPPORTED if it is unavailable.
 
+choice NANOPB_TEXTFORMAT_PRINT_STYLE
+	prompt "Printed output style"
+	default NANOPB_TEXTFORMAT_PRINT_MULTILINE
+
+config NANOPB_TEXTFORMAT_PRINT_MULTILINE
+	bool "One field per line"
+	help
+	  One field per line, submessages indented by two spaces per level, each
+	  line terminated by a newline. Suited to a shell command that shows a
+	  configuration to a person.
+
+config NANOPB_TEXTFORMAT_PRINT_COMPACT
+	bool "A single line"
+	help
+	  All fields on one line, separated by ", ". This is the shortest form
+	  that is still valid standalone text format, so it is what to use for
+	  output meant to be pasted or piped back in -- relevant because
+	  CONFIG_SHELL_CMD_BUFF_SIZE caps a command line.
+
+endchoice
+
+config NANOPB_TEXTFORMAT_PRINT_BRACES
+	bool "Wrap printed output in braces"
+	help
+	  Emit the whole message inside { }. Off by default, because without them
+	  the output is valid standalone text format that protoc will parse as-is;
+	  with them it is a Message body, which protoc will not accept on its own.
+
+	  Parsing accepts outer braces either way -- this affects output only.
+
+config NANOPB_TEXTFORMAT_PRINT_SKIP_DEFAULTS
+	bool "Omit implicit-presence fields that are still zero"
+	help
+	  Leave out singular and required fields whose value is the type's
+	  default, as protoc's own printer does.
+
+	  Off by default, so a printed message shows every field and round-trips
+	  byte-exact into a cleared struct. Note this never hides an optional
+	  field that was explicitly set to zero -- presence is tracked
+	  separately -- nor an empty repeated field, which has nothing to print.
+
 config NANOPB_TEXTFORMAT_MAX_DEPTH
 	int "Maximum submessage nesting depth"
 	default 8

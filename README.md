@@ -43,7 +43,7 @@ manifest:
   projects:
     - name: zephyr-nanopb-textformat
       remote: rodrigopex
-      revision: v0.2.0
+      revision: v0.3.0
       path: modules/lib/zephyr-nanopb-textformat
 ```
 
@@ -74,13 +74,13 @@ PB_TF_DEFINE(UI_CONFIG, ui_config_t);   /* mirrors PB_BIND's two-token form */
 struct ui_config cfg;
 pb_tf_status_t st;
 
-if (pb_tf_parse(&ui_config_t_tf, &cfg, "delay: 100, threshold: 500", 0U, &st) != PB_TF_OK) {
+if (pb_tf_parse(&ui_config_t_tf, &cfg, "delay: 100, threshold: 500", &st) != PB_TF_OK) {
 	printk("at offset %u: %s\n", st.offset, pb_tf_strerror(st.code));
 }
 
 char text[128];
 
-(void)pb_tf_print_buf(&ui_config_t_tf, &cfg, text, sizeof(text), PB_TF_MULTILINE);
+(void)pb_tf_print_buf(&ui_config_t_tf, &cfg, text, sizeof(text));
 ```
 
 ```
@@ -143,19 +143,30 @@ at offset 25: too many values in field 'path'
 
 ```c
 pb_tf_err_t pb_tf_parse(const pb_tf_msg_t *tf, void *msg, const char *text,
-                        unsigned int flags, pb_tf_status_t *status);
+                        pb_tf_status_t *status);   /* clears msg first */
+pb_tf_err_t pb_tf_merge(const pb_tf_msg_t *tf, void *msg, const char *text,
+                        pb_tf_status_t *status);   /* keeps what is there */
 pb_tf_err_t pb_tf_print(const pb_tf_msg_t *tf, const void *msg,
-                        cbprintf_cb out, void *ctx, unsigned int flags);
+                        cbprintf_cb out, void *ctx);
 pb_tf_err_t pb_tf_print_buf(const pb_tf_msg_t *tf, const void *msg,
-                            char *buf, size_t size, unsigned int flags);
+                            char *buf, size_t size);
 void        pb_tf_clear(const pb_tf_msg_t *tf, void *msg);
 const char *pb_tf_strerror(pb_tf_err_t code);
 int         pb_tf_out_buf(int c, void *ctx);   /* a bundled cbprintf_cb */
 ```
 
-`pb_tf_parse()` zeroes the message first unless `PB_TF_NOINIT` is set. Print flags are
-`PB_TF_MULTILINE` (default) or `PB_TF_COMPACT`, optionally OR'd with `PB_TF_BRACES` and
-`PB_TF_SKIP_DEFAULTS`. Print-all is the default: implicit-presence scalars print even when zero.
+**There are no runtime flags.** Output style is a Kconfig choice, so a firmware states it once
+rather than at every call site, and the unused branches are not compiled:
+
+| | |
+|---|---|
+| `NANOPB_TEXTFORMAT_PRINT_MULTILINE` | one field per line, submessages indented (default) |
+| `NANOPB_TEXTFORMAT_PRINT_COMPACT` | a single line — the shortest form that still re-parses |
+| `NANOPB_TEXTFORMAT_PRINT_BRACES` | wrap the whole message in `{ }` |
+| `NANOPB_TEXTFORMAT_PRINT_SKIP_DEFAULTS` | omit implicit-presence fields that are still zero |
+
+Print-all is the default, so a printed message shows every field and round-trips byte-exact into a
+cleared struct. Replace-versus-merge is likewise two named functions rather than a flag.
 
 Prefer `pb_tf_print_buf()` over `pb_tf_print()` + `pb_tf_out_buf()`. It terminates the buffer even
 when a message prints nothing, and reports truncation as `PB_TF_ERR_NO_SPACE` rather than a flag you
@@ -287,9 +298,10 @@ own, exactly as you would with nanopb itself.
 stream. It terminates the buffer even when a message prints nothing, and reports truncation as
 `PB_TF_ERR_NO_SPACE` instead of a flag you have to remember to check.
 
-**Prefer compact output for anything you intend to feed back in.** `PB_TF_COMPACT` without
-`PB_TF_BRACES` is the shortest form that is still valid standalone text format, which matters when
-`CONFIG_SHELL_CMD_BUFF_SIZE` caps the line at 256 bytes by default.
+**Prefer compact output for anything you intend to feed back in.**
+`CONFIG_NANOPB_TEXTFORMAT_PRINT_COMPACT=y` without `_PRINT_BRACES` is the shortest form that is
+still valid standalone text format, which matters when `CONFIG_SHELL_CMD_BUFF_SIZE` caps the line at
+256 bytes by default.
 
 **Report errors with the offset and the field.** `pb_tf_strerror()` names only the fault, so it
 composes:
@@ -316,6 +328,7 @@ silently truncated mid-parse while the same line typed by hand works.
 | `NANOPB_TEXTFORMAT` | `n` | Enable the module |
 | `NANOPB_TEXTFORMAT_FLOAT` | `y` | Float and double support. `depends on !MINIMAL_LIBC` (needs `strtod`) and selects `CBPRINTF_FP_SUPPORT`. `n` makes float fields report `PB_TF_ERR_NO_FLOAT` in both directions and saves 8–12 KB of flash, depending on what else in the image formats floats |
 | `NANOPB_TEXTFORMAT_MAX_DEPTH` | `8` | Submessage nesting limit, range 1–32. Costs 20 bytes of stack per level |
+| `NANOPB_TEXTFORMAT_PRINT_*` | multi-line | Output style; see [API](#api) |
 
 ### cbprintf
 
@@ -384,7 +397,7 @@ forced it.
 
 ## Versioning
 
-[Semantic versioning](https://semver.org). The current version is **0.2.0**.
+[Semantic versioning](https://semver.org). The current version is **0.3.0**.
 
 Major is still 0, which means the API may change — the library is complete and tested, but nobody
 outside this repository has used it yet, and the error strings were reworded as recently as the first

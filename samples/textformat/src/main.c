@@ -52,11 +52,16 @@ static void report(const struct shell *sh, pb_tf_err_t err, const pb_tf_status_t
 	}
 }
 
-/** Shared by set and merge, which differ only in PB_TF_NOINIT. */
-static int assign(const struct shell *sh, const char *text, unsigned int flags)
+/** Shared by set and merge, which differ only in whether cfg is cleared. */
+static int assign(const struct shell *sh, const char *text, bool replace)
 {
 	pb_tf_status_t st;
-	pb_tf_err_t err = pb_tf_parse(&Config_tf, &cfg, text, flags, &st);
+	pb_tf_err_t err;
+
+	/* Two named functions rather than a flag: pb_tf_parse() clears first,
+	 * pb_tf_merge() keeps what is there and appends to repeated fields. */
+	err = replace ? pb_tf_parse(&Config_tf, &cfg, text, &st)
+		      : pb_tf_merge(&Config_tf, &cfg, text, &st);
 
 	if (err != PB_TF_OK) {
 		report(sh, err, &st);
@@ -78,7 +83,7 @@ static int cmd_set(const struct shell *sh, size_t argc, char **argv)
 	}
 
 	/* argv[1] is the untouched remainder of the command line. */
-	return assign(sh, argv[1], 0U);
+	return assign(sh, argv[1], true);
 }
 
 static int cmd_merge(const struct shell *sh, size_t argc, char **argv)
@@ -88,47 +93,35 @@ static int cmd_merge(const struct shell *sh, size_t argc, char **argv)
 		return -EINVAL;
 	}
 
-	return assign(sh, argv[1], PB_TF_NOINIT);
+	return assign(sh, argv[1], false);
 }
 
 static int cmd_get(const struct shell *sh, size_t argc, char **argv)
 {
-	unsigned int flags = PB_TF_MULTILINE;
-	bool pasteable = false;
 	char text[256];
 	pb_tf_err_t err;
-	size_t i;
 
-	for (i = 1U; i < argc; i++) {
-		if (strcmp(argv[i], "compact") == 0) {
-			flags = (flags & ~(unsigned int)PB_TF_MULTILINE) | PB_TF_COMPACT;
-		} else if (strcmp(argv[i], "set") == 0) {
-			/* Print a line that `cfg set` would accept verbatim. */
-			flags |= PB_TF_COMPACT;
-			pasteable = true;
-		} else if (strcmp(argv[i], "brief") == 0) {
-			/* Drops implicit-presence zeros; a set optional still shows. */
-			flags |= PB_TF_SKIP_DEFAULTS;
-		} else {
-			shell_error(sh, "unknown option '%s'; try compact, set or brief",
-				    argv[i]);
-			return -EINVAL;
-		}
-	}
+	ARG_UNUSED(argc);
+	ARG_UNUSED(argv);
 
 	/*
+	 * There is nothing to select here: the output style is a build option
+	 * (CONFIG_NANOPB_TEXTFORMAT_PRINT_*), so a firmware states it once rather
+	 * than at every call site. This sample is built multi-line; set
+	 * CONFIG_NANOPB_TEXTFORMAT_PRINT_COMPACT=y to get a single line.
+	 *
 	 * pb_tf_print_buf() rather than pb_tf_print() + pb_tf_out_buf(): it
 	 * terminates the buffer even when nothing is printed -- an all-default
-	 * message under brief prints nothing at all -- and reports truncation
-	 * instead of setting a flag the caller must remember to check.
+	 * message under SKIP_DEFAULTS prints nothing at all -- and reports
+	 * truncation instead of setting a flag the caller must remember to check.
 	 */
-	err = pb_tf_print_buf(&Config_tf, &cfg, text, sizeof(text), flags);
+	err = pb_tf_print_buf(&Config_tf, &cfg, text, sizeof(text));
 	if (err != PB_TF_OK) {
 		shell_error(sh, "print: %s", pb_tf_strerror(err));
 		return -EIO;
 	}
 
-	shell_print(sh, "%s%s", pasteable ? "cfg set " : "", text);
+	shell_print(sh, "%s", text);
 
 	return 0;
 }
@@ -152,9 +145,10 @@ static int cmd_examples(const struct shell *sh, size_t argc, char **argv)
 		"  cfg set {delay: 100}",
 		"",
 		"An optional scalar. Presence is recorded even for a zero, so this",
-		"still shows under 'brief' while delay: 0 would not:",
+		"still shows under CONFIG_NANOPB_TEXTFORMAT_PRINT_SKIP_DEFAULTS",
+		"while delay: 0 would not:",
 		"  cfg set threshold: 0",
-		"  cfg get brief",
+		"  cfg get",
 		"",
 		"A repeated scalar, as a list or by repetition. Both append:",
 		"  cfg set tags: [1, 2, 3]",
@@ -180,10 +174,10 @@ static int cmd_examples(const struct shell *sh, size_t argc, char **argv)
 		"set replaces; merge keeps what is there and appends repeated fields:",
 		"  cfg set tags: [1, 2]",
 		"  cfg merge tags: [3]",
-		"  cfg get brief",
+		"  cfg get",
 		"",
-		"'cfg get set' prints a line you can paste straight back in:",
-		"  cfg get set",
+		"Build with CONFIG_NANOPB_TEXTFORMAT_PRINT_COMPACT=y and 'cfg get'",
+		"prints one line you can paste straight back in.",
 		"",
 		"Errors carry an offset and the field at fault:",
 		"  cfg set nosuch: 1",
@@ -238,12 +232,13 @@ SHELL_STATIC_SUBCMD_SET_CREATE(
 		      cmd_merge, 1, SHELL_OPT_ARG_RAW),
 	SHELL_CMD_ARG(get, NULL,
 		      "Print the configuration as text format.\n"
-		      "Usage: cfg get [compact|set] [brief]\n"
-		      "  (none)   one field per line, submessages indented\n"
-		      "  compact  a single line, valid standalone text format\n"
-		      "  set      the same, prefixed as a pasteable 'cfg set' line\n"
-		      "  brief    omit implicit-presence fields that are still zero",
-		      cmd_get, 1, 2),
+		      "Usage: cfg get\n"
+		      "The style is a build option, not an argument:\n"
+		      "  CONFIG_NANOPB_TEXTFORMAT_PRINT_MULTILINE (default)\n"
+		      "  CONFIG_NANOPB_TEXTFORMAT_PRINT_COMPACT\n"
+		      "  CONFIG_NANOPB_TEXTFORMAT_PRINT_BRACES\n"
+		      "  CONFIG_NANOPB_TEXTFORMAT_PRINT_SKIP_DEFAULTS",
+		      cmd_get, 1, 0),
 	SHELL_CMD_ARG(clear, NULL,
 		      "Zero the configuration.\n"
 		      "Usage: cfg clear",

@@ -35,6 +35,29 @@ tests:
     extra_configs:
       - CONFIG_NANOPB_WITHOUT_64BIT=y
 
+  # Output style is a build option, so each combination needs its own scenario --
+  # a single build can only print one way. Between these three and `core`
+  # (multi-line, no braces, print-all) every style is round-tripped.
+  nanopb_textformat.compact:
+    extra_configs:
+      - CONFIG_NANOPB_TEXTFORMAT_PRINT_COMPACT=y
+
+  nanopb_textformat.braces:
+    extra_configs:
+      - CONFIG_NANOPB_TEXTFORMAT_PRINT_BRACES=y
+
+  nanopb_textformat.skipdefaults:
+    extra_configs:
+      - CONFIG_NANOPB_TEXTFORMAT_PRINT_COMPACT=y
+      - CONFIG_NANOPB_TEXTFORMAT_PRINT_SKIP_DEFAULTS=y
+
+  # Reduced integral conversion. Fields of 32 bits or less print correctly with
+  # width-correct conversions; a genuine 64-bit field reports
+  # PB_TF_ERR_UNSUPPORTED rather than emitting "%jd".
+  nanopb_textformat.reduced:
+    extra_configs:
+      - CONFIG_CBPRINTF_REDUCED_INTEGRAL=y
+
   # The Kconfig minimum: one level of submessage allowed, so the fixture's
   # two-level chain actually hits PB_TF_ERR_DEPTH rather than merely being
   # configured to.

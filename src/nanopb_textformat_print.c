@@ -43,12 +43,19 @@ struct pb_tf_pframe {
 struct pb_tf_printer {
 	cbprintf_cb out;
 	void *ctx;
-	unsigned int flags;
 	/** Indent applied to the outermost body: 1 when wrapped in braces. */
 	unsigned int base;
 	unsigned int top;
 	struct pb_tf_pframe stack[PB_TF_MAX_DEPTH + 1U];
 };
+
+/*
+ * Style is a build-time decision, so these are compile-time constants and the
+ * unused branch of each is discarded rather than carried around.
+ */
+#define PB_TF_IS_COMPACT       IS_ENABLED(CONFIG_NANOPB_TEXTFORMAT_PRINT_COMPACT)
+#define PB_TF_IS_BRACED        IS_ENABLED(CONFIG_NANOPB_TEXTFORMAT_PRINT_BRACES)
+#define PB_TF_SKIPS_DEFAULTS   IS_ENABLED(CONFIG_NANOPB_TEXTFORMAT_PRINT_SKIP_DEFAULTS)
 
 /*
  * ---------------------------------------------------------------------------
@@ -81,7 +88,9 @@ static pb_tf_err_t pb_tf_emit(struct pb_tf_printer *pr, const char *fmt, ...)
 
 static bool pb_tf_compact(const struct pb_tf_printer *pr)
 {
-	return (pr->flags & PB_TF_COMPACT) != 0U;
+	ARG_UNUSED(pr);
+
+	return PB_TF_IS_COMPACT;
 }
 
 static void pb_tf_indent(struct pb_tf_printer *pr)
@@ -354,8 +363,8 @@ static pb_tf_err_t pb_tf_print_scalar(struct pb_tf_printer *pr, const pb_tf_fiel
 }
 
 /**
- * True if this occurrence is at its type's default and PB_TF_SKIP_DEFAULTS
- * says to omit it.
+ * True if this occurrence is at its type's default and
+ * CONFIG_NANOPB_TEXTFORMAT_PRINT_SKIP_DEFAULTS says to omit it.
  *
  * Only implicit-presence fields are eligible: an optional field is already
  * governed by its has_ bit, and a repeated one by its count.
@@ -363,7 +372,9 @@ static pb_tf_err_t pb_tf_print_scalar(struct pb_tf_printer *pr, const pb_tf_fiel
 static bool pb_tf_skip_default(const struct pb_tf_printer *pr, const pb_tf_field_t *row,
 			       pb_size_t data_size, const void *src)
 {
-	if ((pr->flags & PB_TF_SKIP_DEFAULTS) == 0U) {
+	ARG_UNUSED(pr);
+
+	if (!PB_TF_SKIPS_DEFAULTS) {
 		return false;
 	}
 
@@ -582,8 +593,7 @@ static pb_tf_err_t pb_tf_run_print(struct pb_tf_printer *pr)
 	}
 }
 
-pb_tf_err_t pb_tf_print(const pb_tf_msg_t *tf, const void *msg, cbprintf_cb out, void *ctx,
-			unsigned int flags)
+pb_tf_err_t pb_tf_print(const pb_tf_msg_t *tf, const void *msg, cbprintf_cb out, void *ctx)
 {
 	struct pb_tf_printer pr;
 	pb_tf_err_t err;
@@ -594,8 +604,7 @@ pb_tf_err_t pb_tf_print(const pb_tf_msg_t *tf, const void *msg, cbprintf_cb out,
 
 	pr.out = out;
 	pr.ctx = ctx;
-	pr.flags = flags;
-	pr.base = ((flags & PB_TF_BRACES) != 0U) ? 1U : 0U;
+	pr.base = PB_TF_IS_BRACED ? 1U : 0U;
 	pr.top = 0U;
 
 	pr.stack[0].tf = tf;
@@ -604,7 +613,7 @@ pb_tf_err_t pb_tf_print(const pb_tf_msg_t *tf, const void *msg, cbprintf_cb out,
 	pr.stack[0].elem = 0U;
 	pr.stack[0].flags = PB_TF_PF_FIRST;
 
-	if ((flags & PB_TF_BRACES) != 0U) {
+	if (PB_TF_IS_BRACED) {
 		pb_tf_put(&pr, '{');
 		if (!pb_tf_compact(&pr)) {
 			pb_tf_put(&pr, '\n');
@@ -616,7 +625,7 @@ pb_tf_err_t pb_tf_print(const pb_tf_msg_t *tf, const void *msg, cbprintf_cb out,
 		return err;
 	}
 
-	if ((flags & PB_TF_BRACES) != 0U) {
+	if (PB_TF_IS_BRACED) {
 		pb_tf_put(&pr, '}');
 		if (!pb_tf_compact(&pr)) {
 			pb_tf_put(&pr, '\n');
@@ -626,8 +635,7 @@ pb_tf_err_t pb_tf_print(const pb_tf_msg_t *tf, const void *msg, cbprintf_cb out,
 	return PB_TF_OK;
 }
 
-pb_tf_err_t pb_tf_print_buf(const pb_tf_msg_t *tf, const void *msg, char *buf, size_t size,
-			    unsigned int flags)
+pb_tf_err_t pb_tf_print_buf(const pb_tf_msg_t *tf, const void *msg, char *buf, size_t size)
 {
 	pb_tf_buf_t sink;
 	pb_tf_err_t err;
@@ -647,7 +655,7 @@ pb_tf_err_t pb_tf_print_buf(const pb_tf_msg_t *tf, const void *msg, char *buf, s
 	sink.used = 0U;
 	sink.overflow = false;
 
-	err = pb_tf_print(tf, msg, pb_tf_out_buf, &sink, flags);
+	err = pb_tf_print(tf, msg, pb_tf_out_buf, &sink);
 	if (err != PB_TF_OK) {
 		return err;
 	}

@@ -50,10 +50,10 @@ extern "C" {
  */
 /**@{*/
 #define NANOPB_TEXTFORMAT_VERSION_MAJOR 0
-#define NANOPB_TEXTFORMAT_VERSION_MINOR 2
+#define NANOPB_TEXTFORMAT_VERSION_MINOR 3
 #define NANOPB_TEXTFORMAT_VERSION_PATCH 0
 
-#define NANOPB_TEXTFORMAT_VERSION_STRING "0.2.0"
+#define NANOPB_TEXTFORMAT_VERSION_STRING "0.3.0"
 
 /**
  * @brief Version as @c 0xMMmmpp, for comparison.
@@ -199,40 +199,45 @@ struct pb_tf_status {
 
 typedef struct pb_tf_status pb_tf_status_t;
 
-/** @name Flags for pb_tf_parse(). */
-/**@{*/
-/** Do not clear the message first; append to / merge into what is there. */
-#define PB_TF_NOINIT BIT(0)
-/**@}*/
-
-/** @name Flags for pb_tf_print(). */
-/**@{*/
-/** One field per line, submessages indented. Default. */
-#define PB_TF_MULTILINE 0U
-/** Single line, comma separated. */
-#define PB_TF_COMPACT BIT(0)
-/** Wrap the whole message in braces. Not valid standalone text format. */
-#define PB_TF_BRACES BIT(1)
-/** Omit implicit-presence scalars that equal zero, as protoc's printer does. */
-#define PB_TF_SKIP_DEFAULTS BIT(2)
-/**@}*/
+/*
+ * There are no runtime flags. Output style and the merge-versus-replace choice
+ * used to be a `flags` argument; they are Kconfig options and a second function
+ * now, so a build states its intent once instead of at every call site:
+ *
+ *   CONFIG_NANOPB_TEXTFORMAT_PRINT_MULTILINE / _PRINT_COMPACT
+ *   CONFIG_NANOPB_TEXTFORMAT_PRINT_BRACES
+ *   CONFIG_NANOPB_TEXTFORMAT_PRINT_SKIP_DEFAULTS
+ *
+ * and pb_tf_parse() versus pb_tf_merge().
+ */
 
 /**
  * @brief Parse text format into a nanopb struct.
  *
- * Clears @p msg first unless @c PB_TF_NOINIT is set. Note that clearing means
- * zeroing, not applying proto2 defaults: pass @c PB_TF_NOINIT and a
- * @c <MSG>_init_default struct if you need those.
+ * Clears @p msg first. Note that clearing means zeroing, not applying proto2
+ * defaults; use pb_tf_merge() over an already-initialised struct for those.
  *
  * @param tf     descriptor from PB_TF_DEFINE, e.g. @c &ui_config_t_tf
  * @param msg    the struct to fill
  * @param text   NUL-terminated text format; outer braces are optional
- * @param flags  @c PB_TF_NOINIT, or 0
  * @param status filled in on both success and failure; may be NULL
  *
  * @return PB_TF_OK, or the first error encountered.
  */
-pb_tf_err_t pb_tf_parse(const pb_tf_msg_t *tf, void *msg, const char *text, unsigned int flags,
+pb_tf_err_t pb_tf_parse(const pb_tf_msg_t *tf, void *msg, const char *text,
+			pb_tf_status_t *status);
+
+/**
+ * @brief Parse text format into a nanopb struct without clearing it first.
+ *
+ * As pb_tf_parse(), except that @p msg keeps what it already held: scalars
+ * mentioned in @p text are overwritten, repeated fields are appended to, and
+ * everything else is left alone.
+ *
+ * This is also how to get proto2 defaults: initialise @p msg with
+ * @c <MSG>_init_default yourself, then merge over it.
+ */
+pb_tf_err_t pb_tf_merge(const pb_tf_msg_t *tf, void *msg, const char *text,
 			pb_tf_status_t *status);
 
 /**
@@ -242,17 +247,16 @@ pb_tf_err_t pb_tf_parse(const pb_tf_msg_t *tf, void *msg, const char *text, unsi
  * length limit and no temporary buffer. @c cbprintf_cb is Zephyr's own
  * callback type; pb_tf_out_buf() is a ready-made one that fills a buffer.
  *
+ * The style comes from Kconfig; see the note above the API.
+ *
  * @param tf    descriptor from PB_TF_DEFINE
  * @param msg   the struct to print
  * @param out   character sink
  * @param ctx   passed to @p out
- * @param flags @c PB_TF_MULTILINE / @c PB_TF_COMPACT, optionally OR'd with
- *              @c PB_TF_BRACES and @c PB_TF_SKIP_DEFAULTS
  *
  * @return PB_TF_OK, or the first error encountered.
  */
-pb_tf_err_t pb_tf_print(const pb_tf_msg_t *tf, const void *msg, cbprintf_cb out, void *ctx,
-			unsigned int flags);
+pb_tf_err_t pb_tf_print(const pb_tf_msg_t *tf, const void *msg, cbprintf_cb out, void *ctx);
 
 /** @brief Zero a message, the way pb_tf_parse() does by default. */
 void pb_tf_clear(const pb_tf_msg_t *tf, void *msg);
@@ -293,7 +297,8 @@ typedef struct pb_tf_buf pb_tf_buf_t;
  *
  * Note the consequence of "as it writes": a message that prints nothing at all
  * -- an empty message, or one whose every field is skipped under
- * @c PB_TF_SKIP_DEFAULTS -- never calls this, so the buffer is left exactly as
+ * CONFIG_NANOPB_TEXTFORMAT_PRINT_SKIP_DEFAULTS -- never calls this, so the
+ * buffer is left exactly as
  * the caller supplied it. Either pre-terminate it, or use pb_tf_print_buf(),
  * which handles that case.
  */
@@ -311,13 +316,11 @@ int pb_tf_out_buf(int c, void *ctx);
  * @param msg   the struct to print
  * @param buf   destination, always NUL-terminated on return
  * @param size  bytes available in @p buf, including the terminator
- * @param flags as for pb_tf_print()
  *
  * @return PB_TF_OK, @c PB_TF_ERR_NO_SPACE if the output was truncated, or the
  *         first print error.
  */
-pb_tf_err_t pb_tf_print_buf(const pb_tf_msg_t *tf, const void *msg, char *buf, size_t size,
-			    unsigned int flags);
+pb_tf_err_t pb_tf_print_buf(const pb_tf_msg_t *tf, const void *msg, char *buf, size_t size);
 
 /*
  * ---------------------------------------------------------------------------

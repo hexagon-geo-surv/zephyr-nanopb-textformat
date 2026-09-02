@@ -102,8 +102,9 @@ This is unambiguous: a top-level text-format `Message` can only begin with a fie
 leading `{` cannot be anything else. It is only safe because the matching `}` is **required to be the
 last token** — `{a: 1} junk` is an error.
 
-On **output** braces are a separate, off-by-default flag (`PB_TF_BRACES`), so compact output is
-valid standalone text format that `protoc` will parse as-is.
+On **output** braces are a separate, off-by-default Kconfig option
+(`CONFIG_NANOPB_TEXTFORMAT_PRINT_BRACES`), so compact output is valid standalone text format that
+`protoc` will parse as-is.
 
 ## Semantics worth knowing
 
@@ -122,11 +123,12 @@ valid standalone text format that `protoc` will parse as-is.
 
 ### Initialisation
 
-`pb_tf_parse()` **zeroes** the message first, unless `PB_TF_NOINIT` is passed.
+`pb_tf_parse()` **zeroes** the message first. `pb_tf_merge()` is the same parser without the
+zeroing.
 
 Zeroing is not the same as applying proto2 defaults. Those live in `desc->default_value`, and
 nanopb's decoder for them is `static`, so this library cannot reach it. If you need proto2 defaults,
-pass `PB_TF_NOINIT` over a struct you initialised with `<MSG>_init_default` yourself.
+use `pb_tf_merge()` over a struct you initialised with `<MSG>_init_default` yourself.
 
 Proto2 `required` presence is **not enforced**. A message missing a required field parses fine; whether
 that matters is the caller's business, not the parser's.

@@ -50,7 +50,7 @@ static int cmd_config(const struct shell *sh, size_t argc, char **argv)
 		return -EINVAL;
 	}
 
-	err = pb_tf_parse(&ui_config_t_tf, &cfg, argv[1], 0U, &st);
+	err = pb_tf_parse(&ui_config_t_tf, &cfg, argv[1], &st);
 	if (err != PB_TF_OK) {
 		/* strerror() names only the fault, so context composes cleanly. */
 		if (st.field != NULL) {
@@ -128,8 +128,8 @@ That is the whole command line, not just the message. A long message needs the b
 CONFIG_SHELL_CMD_BUFF_SIZE=512
 ```
 
-Use compact output (`PB_TF_COMPACT`, no `PB_TF_BRACES`) when generating text meant to be pasted back
-in, since it is the shortest form that still re-parses.
+Build with `CONFIG_NANOPB_TEXTFORMAT_PRINT_COMPACT=y` (and not `_PRINT_BRACES`) when generating text
+meant to be pasted back in, since it is the shortest form that still re-parses.
 
 ### 3. Turn `CONFIG_SHELL_WILDCARD` off
 
@@ -190,7 +190,7 @@ static int cmd_get_config(const struct shell *sh, size_t argc, char **argv)
 
 	ui_snapshot(&cfg);
 
-	err = pb_tf_print_buf(&ui_config_t_tf, &cfg, text, sizeof(text), PB_TF_MULTILINE);
+	err = pb_tf_print_buf(&ui_config_t_tf, &cfg, text, sizeof(text));
 	if (err != PB_TF_OK) {
 		shell_error(sh, "print: %s", pb_tf_strerror(err));
 		return -EIO;
@@ -210,7 +210,7 @@ static int out_shell(int c, void *ctx)
 	return c;
 }
 
-(void)pb_tf_print(&ui_config_t_tf, &cfg, out_shell, (void *)sh, PB_TF_MULTILINE);
+(void)pb_tf_print(&ui_config_t_tf, &cfg, out_shell, (void *)sh);
 ```
 
 ## Generating the descriptors
