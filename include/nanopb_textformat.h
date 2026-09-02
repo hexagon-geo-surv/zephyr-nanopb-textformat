@@ -50,10 +50,10 @@ extern "C" {
  */
 /**@{*/
 #define NANOPB_TEXTFORMAT_VERSION_MAJOR 0
-#define NANOPB_TEXTFORMAT_VERSION_MINOR 5
+#define NANOPB_TEXTFORMAT_VERSION_MINOR 6
 #define NANOPB_TEXTFORMAT_VERSION_PATCH 0
 
-#define NANOPB_TEXTFORMAT_VERSION_STRING "0.5.0"
+#define NANOPB_TEXTFORMAT_VERSION_STRING "0.6.0"
 
 /**
  * @brief Version as @c 0xMMmmpp, for comparison.
@@ -158,10 +158,28 @@ struct pb_tf_msg {
 	uint16_t struct_size;
 };
 
-typedef struct pb_tf_field pb_tf_field_t;
-typedef struct pb_tf_msg pb_tf_msg_t;
 
-/** @brief Outcome of a parse or print. */
+/**
+ * @brief Outcome of a parse or print.
+ *
+ * Every function here returns @c int, following Zephyr's convention: **0 on
+ * success, or one of these negated on failure**. The enumerators themselves are
+ * positive, so a caller writes
+ *
+ * @code
+ * int err = pb_tf_parse(&cfg_tf, &cfg, text, &st);
+ *
+ * if (err == -PB_TF_ERR_RANGE) {
+ *         ...
+ * }
+ * @endcode
+ *
+ * and @c pb_tf_strerror() accepts either sign, so a return value or a
+ * @c status.code can be passed to it directly.
+ *
+ * Append new codes at the end. Renumbering these changes the meaning of a value
+ * a consumer may have stored.
+ */
 enum pb_tf_err {
 	PB_TF_OK = 0,
 	/** Unexpected token, or unterminated brace/string/list. */
@@ -186,29 +204,27 @@ enum pb_tf_err {
 	PB_TF_ERR_INTERNAL,
 };
 
-typedef enum pb_tf_err pb_tf_err_t;
 
 /** @brief Where and in which field an error happened. */
 struct pb_tf_status {
-	pb_tf_err_t code;
+	/** 0 on success, or a negative @ref pb_tf_err. */
+	int code;
 	/** Byte offset into the input text. */
 	uint16_t offset;
 	/** Field name if one was in scope, else NULL. */
 	const char *field;
 };
 
-typedef struct pb_tf_status pb_tf_status_t;
 
 /*
  * There are no runtime flags. Output style and the merge-versus-replace choice
  * used to be a `flags` argument; they are Kconfig options and a second function
  * now, so a build states its intent once instead of at every call site:
  *
- *   CONFIG_NANOPB_TEXTFORMAT_PRINT_MULTILINE / _PRINT_COMPACT
- *   CONFIG_NANOPB_TEXTFORMAT_PRINT_BRACES
  *   CONFIG_NANOPB_TEXTFORMAT_PRINT_SKIP_DEFAULTS
  *
- * and pb_tf_parse() versus pb_tf_merge().
+ * pb_tf_parse() versus pb_tf_merge(), and the line style and braces by function
+ * name -- pb_tf_print_compact(), pb_tf_print_multiline_braces() and so on.
  *
  * Either direction can also be left out entirely:
  *
@@ -234,8 +250,8 @@ typedef struct pb_tf_status pb_tf_status_t;
  * @return PB_TF_OK, or the first error encountered.
  */
 #if defined(CONFIG_NANOPB_TEXTFORMAT_PARSE)
-pb_tf_err_t pb_tf_parse(const pb_tf_msg_t *tf, void *msg, const char *text,
-			pb_tf_status_t *status);
+int pb_tf_parse(const struct pb_tf_msg *tf, void *msg, const char *text,
+			struct pb_tf_status *status);
 
 /**
  * @brief Parse text format into a nanopb struct without clearing it first.
@@ -247,8 +263,8 @@ pb_tf_err_t pb_tf_parse(const pb_tf_msg_t *tf, void *msg, const char *text,
  * This is also how to get proto2 defaults: initialise @p msg with
  * @c <MSG>_init_default yourself, then merge over it.
  */
-pb_tf_err_t pb_tf_merge(const pb_tf_msg_t *tf, void *msg, const char *text,
-			pb_tf_status_t *status);
+int pb_tf_merge(const struct pb_tf_msg *tf, void *msg, const char *text,
+			struct pb_tf_status *status);
 #endif /* CONFIG_NANOPB_TEXTFORMAT_PARSE */
 
 /**
@@ -268,11 +284,37 @@ pb_tf_err_t pb_tf_merge(const pb_tf_msg_t *tf, void *msg, const char *text,
  * @return PB_TF_OK, or the first error encountered.
  */
 #if defined(CONFIG_NANOPB_TEXTFORMAT_PRINT)
-pb_tf_err_t pb_tf_print(const pb_tf_msg_t *tf, const void *msg, cbprintf_cb out, void *ctx);
+/**
+ * @name Printing in a style named at the call site
+ *
+ * Each names the output it produces, so a firmware can use more than one shape
+ * -- multi-line for a person reading a configuration, compact for a line it
+ * means to paste back in, log, or send somewhere -- and a call site says which
+ * it is. There is deliberately no style-agnostic pb_tf_print(): its output
+ * would depend on a Kconfig the reader has to go and look up.
+ *
+ * Zephyr compiles with @c -ffunction-sections and links with @c --gc-sections,
+ * so a variant your application never calls costs nothing in the final image.
+ *
+ * @c CONFIG_NANOPB_TEXTFORMAT_PRINT_SKIP_DEFAULTS remains Kconfig-only: unlike
+ * the line style it is not something one firmware plausibly wants both ways.
+ */
+/**@{*/
+int pb_tf_print_compact(const struct pb_tf_msg *tf, const void *msg, cbprintf_cb out, void *ctx);
+
+int pb_tf_print_multiline(const struct pb_tf_msg *tf, const void *msg, cbprintf_cb out,
+				  void *ctx);
+
+int pb_tf_print_compact_braces(const struct pb_tf_msg *tf, const void *msg, cbprintf_cb out,
+				       void *ctx);
+
+int pb_tf_print_multiline_braces(const struct pb_tf_msg *tf, const void *msg, cbprintf_cb out,
+					 void *ctx);
+/**@}*/
 #endif
 
 /** @brief Zero a message, the way pb_tf_parse() does by default. */
-void pb_tf_clear(const pb_tf_msg_t *tf, void *msg);
+void pb_tf_clear(const struct pb_tf_msg *tf, void *msg);
 
 /**
  * @brief Human-readable text for an error code. Never NULL.
@@ -288,7 +330,7 @@ void pb_tf_clear(const pb_tf_msg_t *tf, void *msg);
  * // -> "at offset 14: value out of range in field 'threshold'"
  * @endcode
  */
-const char *pb_tf_strerror(pb_tf_err_t code);
+const char *pb_tf_strerror(int err);
 
 /** @brief Context for pb_tf_out_buf(). */
 struct pb_tf_buf {
@@ -300,7 +342,6 @@ struct pb_tf_buf {
 	bool overflow;
 };
 
-typedef struct pb_tf_buf pb_tf_buf_t;
 
 /**
  * @brief A @c cbprintf_cb that appends into a @ref pb_tf_buf.
@@ -334,7 +375,19 @@ int pb_tf_out_buf(int c, void *ctx);
  *         first print error.
  */
 #if defined(CONFIG_NANOPB_TEXTFORMAT_PRINT)
-pb_tf_err_t pb_tf_print_buf(const pb_tf_msg_t *tf, const void *msg, char *buf, size_t size);
+/** @name As pb_tf_print_buf(), in a style named at the call site. */
+/**@{*/
+int pb_tf_print_buf_compact(const struct pb_tf_msg *tf, const void *msg, char *buf, size_t size);
+
+int pb_tf_print_buf_multiline(const struct pb_tf_msg *tf, const void *msg, char *buf,
+				      size_t size);
+
+int pb_tf_print_buf_compact_braces(const struct pb_tf_msg *tf, const void *msg, char *buf,
+					   size_t size);
+
+int pb_tf_print_buf_multiline_braces(const struct pb_tf_msg *tf, const void *msg, char *buf,
+					     size_t size);
+/**@}*/
 #endif
 
 /*
@@ -420,7 +473,7 @@ pb_tf_err_t pb_tf_print_buf(const pb_tf_msg_t *tf, const void *msg, char *buf, s
 #define PB_TF_SUBTF_ONEOF3(ltype, st, u, m) PB_TF_SUB##ltype(st##_##u##_##m##_MSGTYPE)
 
 /* Forward declaration for each submessage type, so row order never matters. */
-#define PB_TF_EXTDECL(t) extern const pb_tf_msg_t t##_tf;
+#define PB_TF_EXTDECL(t) extern const struct pb_tf_msg t##_tf;
 
 #define PB_TF_EXT_PB_LTYPE_MESSAGE(t)            PB_TF_EXTDECL(t)
 #define PB_TF_EXT_PB_LTYPE_MSG_W_CB(t)           PB_TF_EXTDECL(t)
@@ -491,20 +544,20 @@ pb_tf_err_t pb_tf_print_buf(const pb_tf_msg_t *tf, const void *msg, char *buf, s
  */
 #define PB_TF_DEFINE(msgname, structname)                                                          \
 	msgname##_FIELDLIST(PB_TF_GEN_EXTERN, structname)                                          \
-	static const pb_tf_field_t structname##__tf_fields[] = {                                   \
+	static const struct pb_tf_field structname##__tf_fields[] = {                                   \
 		msgname##_FIELDLIST(PB_TF_GEN_ROW, structname){NULL, 0, 0, 0, NULL}};               \
-	const pb_tf_msg_t structname##_tf = {                                                      \
+	const struct pb_tf_msg structname##_tf = {                                                      \
 		&structname##_msg, structname##__tf_fields,                                        \
 		(uint16_t)(ARRAY_SIZE(structname##__tf_fields) - 1U),                              \
 		(uint16_t)sizeof(structname)};                                                     \
-	extern const pb_tf_msg_t structname##_tf
+	extern const struct pb_tf_msg structname##_tf
 
 /**
  * @brief Declare a descriptor defined in another translation unit.
  *
  * @code PB_TF_DECLARE(ui_config_t); @endcode
  */
-#define PB_TF_DECLARE(structname) extern const pb_tf_msg_t structname##_tf
+#define PB_TF_DECLARE(structname) extern const struct pb_tf_msg structname##_tf
 
 #ifdef __cplusplus
 }

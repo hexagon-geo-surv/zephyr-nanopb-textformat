@@ -38,8 +38,8 @@ cap.
 static int cmd_config(const struct shell *sh, size_t argc, char **argv)
 {
 	struct ui_config cfg;
-	pb_tf_status_t st;
-	pb_tf_err_t err;
+	struct pb_tf_status st;
+	int err;
 
 	/*
 	 * argv[1] is the raw remainder of the command line. It is optional, so
@@ -51,7 +51,7 @@ static int cmd_config(const struct shell *sh, size_t argc, char **argv)
 	}
 
 	err = pb_tf_parse(&ui_config_t_tf, &cfg, argv[1], &st);
-	if (err != PB_TF_OK) {
+	if (err != 0) {
 		/* strerror() names only the fault, so context composes cleanly. */
 		if (st.field != NULL) {
 			shell_error(sh, "at offset %u: %s in field '%s'", st.offset,
@@ -118,8 +118,8 @@ That is the whole command line, not just the message. A long message needs the b
 CONFIG_SHELL_CMD_BUFF_SIZE=512
 ```
 
-Build with `CONFIG_NANOPB_TEXTFORMAT_PRINT_COMPACT=y` (and not `_PRINT_BRACES`) when generating text
-meant to be pasted back in, since it is the shortest form that still re-parses.
+Use `pb_tf_print_buf_compact()` when generating text meant to be pasted back in, since it is the
+shortest form that still re-parses.
 
 ### 3. Raise `CONFIG_SHELL_BACKEND_SERIAL_RX_RING_BUFFER_SIZE`
 
@@ -169,8 +169,8 @@ and a reproduction, which is why it is stated as mechanism here rather than as a
 
 ## Printing configuration back
 
-Use `pb_tf_print_buf()` rather than `pb_tf_print()` + `pb_tf_out_buf()` unless you have a reason not
-to. It terminates the buffer even when the message prints nothing — an empty message, or every field
+Use a `pb_tf_print_buf_*` form rather than `pb_tf_print_*` + `pb_tf_out_buf()` unless you have a
+reason not to. It terminates the buffer even when the message prints nothing — an empty message, or every field
 skipped under `CONFIG_NANOPB_TEXTFORMAT_PRINT_SKIP_DEFAULTS` — and turns truncation into
 `PB_TF_ERR_NO_SPACE` instead of a
 flag you have to remember to check.
@@ -180,15 +180,15 @@ static int cmd_get_config(const struct shell *sh, size_t argc, char **argv)
 {
 	struct ui_config cfg;
 	char text[256];
-	pb_tf_err_t err;
+	int err;
 
 	ARG_UNUSED(argc);
 	ARG_UNUSED(argv);
 
 	ui_snapshot(&cfg);
 
-	err = pb_tf_print_buf(&ui_config_t_tf, &cfg, text, sizeof(text));
-	if (err != PB_TF_OK) {
+	err = pb_tf_print_buf_multiline(&ui_config_t_tf, &cfg, text, sizeof(text));
+	if (err != 0) {
 		shell_error(sh, "print: %s", pb_tf_strerror(err));
 		return -EIO;
 	}
@@ -207,7 +207,7 @@ static int out_shell(int c, void *ctx)
 	return c;
 }
 
-(void)pb_tf_print(&ui_config_t_tf, &cfg, out_shell, (void *)sh);
+(void)pb_tf_print_multiline(&ui_config_t_tf, &cfg, out_shell, (void *)sh);
 ```
 
 ## Generating the descriptors

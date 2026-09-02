@@ -41,8 +41,13 @@ PB_TF_DEFINE(Config, Config);
 /** The "device configuration" this sample edits. */
 static Config cfg;
 
-/** Report a parse failure. strerror() names only the fault, so context composes. */
-static void report(const struct shell *sh, pb_tf_err_t err, const pb_tf_status_t *st)
+/**
+ * Report a parse failure.
+ *
+ * strerror() names only the fault, so context composes -- and it takes either
+ * sign, so the negative code from status can go straight in.
+ */
+static void report(const struct shell *sh, int err, const struct pb_tf_status *st)
 {
 	if (st->field != NULL) {
 		shell_error(sh, "at offset %u: %s in field '%s'", st->offset,
@@ -55,15 +60,15 @@ static void report(const struct shell *sh, pb_tf_err_t err, const pb_tf_status_t
 /** Shared by set and merge, which differ only in whether cfg is cleared. */
 static int assign(const struct shell *sh, const char *text, bool replace)
 {
-	pb_tf_status_t st;
-	pb_tf_err_t err;
+	struct pb_tf_status st;
+	int err;
 
 	/* Two named functions rather than a flag: pb_tf_parse() clears first,
 	 * pb_tf_merge() keeps what is there and appends to repeated fields. */
 	err = replace ? pb_tf_parse(&Config_tf, &cfg, text, &st)
 		      : pb_tf_merge(&Config_tf, &cfg, text, &st);
 
-	if (err != PB_TF_OK) {
+	if (err != 0) {
 		report(sh, err, &st);
 		return -EINVAL;
 	}
@@ -98,25 +103,44 @@ static int cmd_merge(const struct shell *sh, size_t argc, char **argv)
 
 static int cmd_get(const struct shell *sh, size_t argc, char **argv)
 {
+	bool compact = false;
+	bool braces = false;
 	char text[256];
-	pb_tf_err_t err;
+	int err;
+	size_t i;
 
-	ARG_UNUSED(argc);
-	ARG_UNUSED(argv);
+	for (i = 1U; i < argc; i++) {
+		if (strcmp(argv[i], "compact") == 0) {
+			compact = true;
+		} else if (strcmp(argv[i], "braces") == 0) {
+			braces = true;
+		} else {
+			shell_error(sh, "unknown option '%s'; try compact or braces", argv[i]);
+			return -EINVAL;
+		}
+	}
 
 	/*
-	 * There is nothing to select here: the output style is a build option
-	 * (CONFIG_NANOPB_TEXTFORMAT_PRINT_*), so a firmware states it once rather
-	 * than at every call site. This sample is built multi-line; set
-	 * CONFIG_NANOPB_TEXTFORMAT_PRINT_COMPACT=y to get a single line.
+	 * The style is named by the function, so this command can offer both --
+	 * multi-line for reading, compact for a line to paste back in. Only the
+	 * variants actually called are linked, since Zephyr builds with
+	 * -ffunction-sections and links with --gc-sections.
 	 *
-	 * pb_tf_print_buf() rather than pb_tf_print() + pb_tf_out_buf(): it
-	 * terminates the buffer even when nothing is printed -- an all-default
+	 * pb_tf_print_buf_* rather than pb_tf_print_* with pb_tf_out_buf: the
+	 * buffered form terminates even when nothing is printed -- an all-default
 	 * message under SKIP_DEFAULTS prints nothing at all -- and reports
 	 * truncation instead of setting a flag the caller must remember to check.
 	 */
-	err = pb_tf_print_buf(&Config_tf, &cfg, text, sizeof(text));
-	if (err != PB_TF_OK) {
+	if (compact) {
+		err = braces ? pb_tf_print_buf_compact_braces(&Config_tf, &cfg, text, sizeof(text))
+			     : pb_tf_print_buf_compact(&Config_tf, &cfg, text, sizeof(text));
+	} else {
+		err = braces
+			      ? pb_tf_print_buf_multiline_braces(&Config_tf, &cfg, text, sizeof(text))
+			      : pb_tf_print_buf_multiline(&Config_tf, &cfg, text, sizeof(text));
+	}
+
+	if (err != 0) {
 		shell_error(sh, "print: %s", pb_tf_strerror(err));
 		return -EIO;
 	}
@@ -176,8 +200,8 @@ static int cmd_examples(const struct shell *sh, size_t argc, char **argv)
 		"  cfg merge tags: [3]",
 		"  cfg get",
 		"",
-		"Build with CONFIG_NANOPB_TEXTFORMAT_PRINT_COMPACT=y and 'cfg get'",
-		"prints one line you can paste straight back in.",
+		"'cfg get compact' prints one line you can paste straight back in:",
+		"  cfg get compact",
 		"",
 		"Errors carry an offset and the field at fault:",
 		"  cfg set nosuch: 1",
@@ -232,13 +256,13 @@ SHELL_STATIC_SUBCMD_SET_CREATE(
 		      cmd_merge, 1, SHELL_OPT_ARG_RAW),
 	SHELL_CMD_ARG(get, NULL,
 		      "Print the configuration as text format.\n"
-		      "Usage: cfg get\n"
-		      "The style is a build option, not an argument:\n"
-		      "  CONFIG_NANOPB_TEXTFORMAT_PRINT_MULTILINE (default)\n"
-		      "  CONFIG_NANOPB_TEXTFORMAT_PRINT_COMPACT\n"
-		      "  CONFIG_NANOPB_TEXTFORMAT_PRINT_BRACES\n"
-		      "  CONFIG_NANOPB_TEXTFORMAT_PRINT_SKIP_DEFAULTS",
-		      cmd_get, 1, 0),
+		      "Usage: cfg get [compact] [braces]\n"
+		      "  (none)   one field per line, submessages indented\n"
+		      "  compact  a single line, valid standalone text format\n"
+		      "  braces   wrap the message in { }\n"
+		      "Omitting implicit-presence zeros is a build option,\n"
+		      "CONFIG_NANOPB_TEXTFORMAT_PRINT_SKIP_DEFAULTS.",
+		      cmd_get, 1, 2),
 	SHELL_CMD_ARG(clear, NULL,
 		      "Zero the configuration.\n"
 		      "Usage: cfg clear",

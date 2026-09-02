@@ -65,11 +65,11 @@
  */
 struct pb_tf_frame {
 	/** Descriptor of the message this body fills. */
-	const pb_tf_msg_t *tf;
+	const struct pb_tf_msg *tf;
 	/** The struct being filled. */
 	void *msg;
 	/** Field currently being parsed, for list continuation and diagnostics. */
-	const pb_tf_field_t *row;
+	const struct pb_tf_field *row;
 	/** Where to write on completion: an iterator's pSize, or NULL. */
 	void *commit_ptr;
 	/** Value for PB_TF_CM_SIZE. */
@@ -87,7 +87,7 @@ struct pb_tf_parser {
 	/** Current position. */
 	const char *p;
 	/** Caller's status block, or NULL. */
-	pb_tf_status_t *status;
+	struct pb_tf_status *status;
 	/** Index of the innermost open body in @ref stack. */
 	unsigned int top;
 	/**
@@ -115,21 +115,22 @@ struct pb_tf_num {
  * Record an error and return its code.
  *
  * @p at points into the input; the reported offset is relative to its start,
- * clamped because pb_tf_status_t carries a uint16_t (a shell line is capped far
+ * clamped because struct pb_tf_status carries a uint16_t (a shell line is capped far
  * below that by CONFIG_SHELL_CMD_BUFF_SIZE anyway).
  */
-static pb_tf_err_t pb_tf_fail(struct pb_tf_parser *ps, pb_tf_err_t code, const char *at,
-			      const char *field)
+static int pb_tf_fail(struct pb_tf_parser *ps, enum pb_tf_err code, const char *at,
+		      const char *field)
 {
 	if (ps->status != NULL) {
 		size_t off = (size_t)(at - ps->text);
 
-		ps->status->code = code;
+		/* Stored negated, so it compares directly against a return value. */
+		ps->status->code = -(int)code;
 		ps->status->offset = (uint16_t)MIN(off, (size_t)UINT16_MAX);
 		ps->status->field = field;
 	}
 
-	return code;
+	return -(int)code;
 }
 
 /*
@@ -213,7 +214,7 @@ static bool pb_tf_digit_val(char c, unsigned int base, unsigned int *out)
  * what this build's codec could hold -- the range check against the field's own
  * width happens later, in pb_tf_write_int().
  */
-static pb_tf_err_t pb_tf_scan_num(struct pb_tf_parser *ps, const char *field,
+static int pb_tf_scan_num(struct pb_tf_parser *ps, const char *field,
 				  struct pb_tf_num *out)
 {
 	const char *start = ps->p;
@@ -257,7 +258,7 @@ static pb_tf_err_t pb_tf_scan_num(struct pb_tf_parser *ps, const char *field,
 		return pb_tf_fail(ps, PB_TF_ERR_SYNTAX, start, field);
 	}
 
-	return PB_TF_OK;
+	return 0;
 }
 
 /*
@@ -297,7 +298,7 @@ static bool pb_tf_vtype_is_signed(uint8_t vtype)
  * is what makes nanopb's int_size option, an implementation-defined enum width
  * (-fshort-enums), and PB_CONVERT_DOUBLE_FLOAT all come out correct.
  */
-static pb_tf_err_t pb_tf_write_int(struct pb_tf_parser *ps, const pb_tf_field_t *row,
+static int pb_tf_write_int(struct pb_tf_parser *ps, const struct pb_tf_field *row,
 				   pb_size_t data_size, void *dest, const struct pb_tf_num *n,
 				   const char *at)
 {
@@ -350,7 +351,7 @@ static pb_tf_err_t pb_tf_write_int(struct pb_tf_parser *ps, const pb_tf_field_t 
 			return pb_tf_fail(ps, PB_TF_ERR_RANGE, at, row->name);
 		}
 
-		return PB_TF_OK;
+		return 0;
 	}
 
 	/*
@@ -381,11 +382,11 @@ static pb_tf_err_t pb_tf_write_int(struct pb_tf_parser *ps, const pb_tf_field_t 
 		return pb_tf_fail(ps, PB_TF_ERR_RANGE, at, row->name);
 	}
 
-	return PB_TF_OK;
+	return 0;
 }
 
 /** Parse a bool: true/false/True/False/t/f, or the integers 1 and 0. */
-static pb_tf_err_t pb_tf_write_bool(struct pb_tf_parser *ps, const pb_tf_field_t *row,
+static int pb_tf_write_bool(struct pb_tf_parser *ps, const struct pb_tf_field *row,
 				    pb_size_t data_size, void *dest)
 {
 	const char *start = ps->p;
@@ -406,9 +407,9 @@ static pb_tf_err_t pb_tf_write_bool(struct pb_tf_parser *ps, const pb_tf_field_t
 		}
 	} else {
 		struct pb_tf_num n;
-		pb_tf_err_t err = pb_tf_scan_num(ps, row->name, &n);
+		int err = pb_tf_scan_num(ps, row->name, &n);
 
-		if (err != PB_TF_OK) {
+		if (err != 0) {
 			return err;
 		}
 		if (n.neg || (n.mag > 1U)) {
@@ -423,7 +424,7 @@ static pb_tf_err_t pb_tf_write_bool(struct pb_tf_parser *ps, const pb_tf_field_t
 
 	*(bool *)dest = value;
 
-	return PB_TF_OK;
+	return 0;
 }
 
 
@@ -444,7 +445,7 @@ struct pb_tf_sink {
 	size_t len;
 };
 
-static pb_tf_err_t pb_tf_sink_put(struct pb_tf_parser *ps, const pb_tf_field_t *row,
+static int pb_tf_sink_put(struct pb_tf_parser *ps, const struct pb_tf_field *row,
 				  struct pb_tf_sink *sk, pb_byte_t b, const char *at)
 {
 	if (sk->len >= sk->cap) {
@@ -454,7 +455,7 @@ static pb_tf_err_t pb_tf_sink_put(struct pb_tf_parser *ps, const pb_tf_field_t *
 	sk->buf[sk->len] = b;
 	sk->len++;
 
-	return PB_TF_OK;
+	return 0;
 }
 
 /**
@@ -465,10 +466,10 @@ static pb_tf_err_t pb_tf_sink_put(struct pb_tf_parser *ps, const pb_tf_field_t *
  * ill-formed UTF-8 -- and keeps a CONFIG_NANOPB_VALIDATE_UTF8 build from later
  * rejecting a struct this parser filled.
  */
-static pb_tf_err_t pb_tf_put_utf8(struct pb_tf_parser *ps, const pb_tf_field_t *row,
+static int pb_tf_put_utf8(struct pb_tf_parser *ps, const struct pb_tf_field *row,
 				  struct pb_tf_sink *sk, uint32_t cp, const char *at)
 {
-	pb_tf_err_t err;
+	int err;
 
 	if (cp < 0x80U) {
 		return pb_tf_sink_put(ps, row, sk, (pb_byte_t)cp, at);
@@ -476,18 +477,18 @@ static pb_tf_err_t pb_tf_put_utf8(struct pb_tf_parser *ps, const pb_tf_field_t *
 
 	if (cp < 0x800U) {
 		err = pb_tf_sink_put(ps, row, sk, (pb_byte_t)(0xC0U | (cp >> 6)), at);
-		if (err != PB_TF_OK) {
+		if (err != 0) {
 			return err;
 		}
 		return pb_tf_sink_put(ps, row, sk, (pb_byte_t)(0x80U | (cp & 0x3FU)), at);
 	}
 
 	err = pb_tf_sink_put(ps, row, sk, (pb_byte_t)(0xE0U | (cp >> 12)), at);
-	if (err != PB_TF_OK) {
+	if (err != 0) {
 		return err;
 	}
 	err = pb_tf_sink_put(ps, row, sk, (pb_byte_t)(0x80U | ((cp >> 6) & 0x3FU)), at);
-	if (err != PB_TF_OK) {
+	if (err != 0) {
 		return err;
 	}
 
@@ -501,7 +502,7 @@ static pb_tf_err_t pb_tf_put_utf8(struct pb_tf_parser *ps, const pb_tf_field_t *
  * \uXXXX. Anything else -- including \U, which is out of scope -- is a syntax
  * error rather than a silently dropped backslash.
  */
-static pb_tf_err_t pb_tf_scan_escape(struct pb_tf_parser *ps, const pb_tf_field_t *row,
+static int pb_tf_scan_escape(struct pb_tf_parser *ps, const struct pb_tf_field *row,
 				     struct pb_tf_sink *sk)
 {
 	const char *at = ps->p - 1;
@@ -633,7 +634,7 @@ static pb_tf_err_t pb_tf_scan_escape(struct pb_tf_parser *ps, const pb_tf_field_
  * here -- the second literal simply is not a field name, so the field loop
  * reports it.
  */
-static pb_tf_err_t pb_tf_scan_quoted(struct pb_tf_parser *ps, const pb_tf_field_t *row,
+static int pb_tf_scan_quoted(struct pb_tf_parser *ps, const struct pb_tf_field *row,
 				     struct pb_tf_sink *sk)
 {
 	const char *start = ps->p;
@@ -648,7 +649,7 @@ static pb_tf_err_t pb_tf_scan_quoted(struct pb_tf_parser *ps, const pb_tf_field_
 
 	while (*ps->p != quote) {
 		unsigned char c = (unsigned char)*ps->p;
-		pb_tf_err_t err;
+		int err;
 
 		if (c == 0U) {
 			/* Unterminated literal. */
@@ -667,22 +668,22 @@ static pb_tf_err_t pb_tf_scan_quoted(struct pb_tf_parser *ps, const pb_tf_field_
 			ps->p++;
 		}
 
-		if (err != PB_TF_OK) {
+		if (err != 0) {
 			return err;
 		}
 	}
 
 	ps->p++;
 
-	return PB_TF_OK;
+	return 0;
 }
 
 /** A char array. nanopb's bound is size + 1 <= data_size, NUL always written. */
-static pb_tf_err_t pb_tf_write_string(struct pb_tf_parser *ps, const pb_tf_field_t *row,
+static int pb_tf_write_string(struct pb_tf_parser *ps, const struct pb_tf_field *row,
 				      pb_size_t data_size, void *dest)
 {
 	struct pb_tf_sink sk;
-	pb_tf_err_t err;
+	int err;
 
 	if (data_size < 1U) {
 		return pb_tf_fail(ps, PB_TF_ERR_INTERNAL, ps->p, row->name);
@@ -693,13 +694,13 @@ static pb_tf_err_t pb_tf_write_string(struct pb_tf_parser *ps, const pb_tf_field
 	sk.len = 0U;
 
 	err = pb_tf_scan_quoted(ps, row, &sk);
-	if (err != PB_TF_OK) {
+	if (err != 0) {
 		return err;
 	}
 
 	sk.buf[sk.len] = 0U;
 
-	return PB_TF_OK;
+	return 0;
 }
 
 /**
@@ -709,12 +710,12 @@ static pb_tf_err_t pb_tf_write_string(struct pb_tf_parser *ps, const pb_tf_field
  * Note that this can exceed the .options max_size by whatever tail padding the
  * struct carries -- true of nanopb itself, so it is not advertised as exact.
  */
-static pb_tf_err_t pb_tf_write_bytes(struct pb_tf_parser *ps, const pb_tf_field_t *row,
+static int pb_tf_write_bytes(struct pb_tf_parser *ps, const struct pb_tf_field *row,
 				     pb_size_t data_size, void *dest)
 {
 	pb_bytes_array_t *arr = dest;
 	struct pb_tf_sink sk;
-	pb_tf_err_t err;
+	int err;
 
 	if ((size_t)data_size <= offsetof(pb_bytes_array_t, bytes)) {
 		return pb_tf_fail(ps, PB_TF_ERR_INTERNAL, ps->p, row->name);
@@ -725,13 +726,13 @@ static pb_tf_err_t pb_tf_write_bytes(struct pb_tf_parser *ps, const pb_tf_field_
 	sk.len = 0U;
 
 	err = pb_tf_scan_quoted(ps, row, &sk);
-	if (err != PB_TF_OK) {
+	if (err != 0) {
 		return err;
 	}
 
 	arr->size = (pb_size_t)sk.len;
 
-	return PB_TF_OK;
+	return 0;
 }
 
 /**
@@ -742,32 +743,32 @@ static pb_tf_err_t pb_tf_write_bytes(struct pb_tf_parser *ps, const pb_tf_field_
  * as PB_TF_ERR_TYPE -- the literal is the wrong shape for the field, and
  * PB_TF_ERR_NO_SPACE would claim it was too long when it is too short.
  */
-static pb_tf_err_t pb_tf_write_fixed_bytes(struct pb_tf_parser *ps, const pb_tf_field_t *row,
+static int pb_tf_write_fixed_bytes(struct pb_tf_parser *ps, const struct pb_tf_field *row,
 					   pb_size_t data_size, void *dest)
 {
 	const char *start = ps->p;
 	struct pb_tf_sink sk;
-	pb_tf_err_t err;
+	int err;
 
 	sk.buf = dest;
 	sk.cap = (size_t)data_size;
 	sk.len = 0U;
 
 	err = pb_tf_scan_quoted(ps, row, &sk);
-	if (err != PB_TF_OK) {
+	if (err != 0) {
 		return err;
 	}
 
 	if (sk.len == 0U) {
 		(void)memset(dest, 0, data_size);
-		return PB_TF_OK;
+		return 0;
 	}
 
 	if (sk.len != (size_t)data_size) {
 		return pb_tf_fail(ps, PB_TF_ERR_TYPE, start, row->name);
 	}
 
-	return PB_TF_OK;
+	return 0;
 }
 
 /*
@@ -875,7 +876,7 @@ static const char *pb_tf_float_extent(const char *p)
  * @param special set when the value is an infinity or NaN, so the caller knows
  *                to skip the finite range check.
  */
-static pb_tf_err_t pb_tf_scan_float(struct pb_tf_parser *ps, const pb_tf_field_t *row, double *out,
+static int pb_tf_scan_float(struct pb_tf_parser *ps, const struct pb_tf_field *row, double *out,
 				    bool *special)
 {
 	const char *start = ps->p;
@@ -905,7 +906,7 @@ static pb_tf_err_t pb_tf_scan_float(struct pb_tf_parser *ps, const pb_tf_field_t
 			*out = neg ? -INFINITY : INFINITY;
 			*special = true;
 			ps->p = q;
-			return PB_TF_OK;
+			return 0;
 		}
 
 		if (pb_tf_ident_ieq(w, len, "nan")) {
@@ -913,7 +914,7 @@ static pb_tf_err_t pb_tf_scan_float(struct pb_tf_parser *ps, const pb_tf_field_t
 			*out = (double)NAN;
 			*special = true;
 			ps->p = q;
-			return PB_TF_OK;
+			return 0;
 		}
 
 		return pb_tf_fail(ps, PB_TF_ERR_TYPE, start, row->name);
@@ -943,10 +944,10 @@ static pb_tf_err_t pb_tf_scan_float(struct pb_tf_parser *ps, const pb_tf_field_t
 
 	*out = v;
 
-	return PB_TF_OK;
+	return 0;
 }
 
-static pb_tf_err_t pb_tf_write_float(struct pb_tf_parser *ps, const pb_tf_field_t *row,
+static int pb_tf_write_float(struct pb_tf_parser *ps, const struct pb_tf_field *row,
 				     pb_size_t data_size, void *dest)
 {
 	const char *start = ps->p;
@@ -959,9 +960,9 @@ static pb_tf_err_t pb_tf_write_float(struct pb_tf_parser *ps, const pb_tf_field_
 	 * store is dead in every real path; do not remove it.
 	 */
 	double v = 0.0;
-	pb_tf_err_t err = pb_tf_scan_float(ps, row, &v, &special);
+	int err = pb_tf_scan_float(ps, row, &v, &special);
 
-	if (err != PB_TF_OK) {
+	if (err != 0) {
 		return err;
 	}
 
@@ -989,12 +990,12 @@ static pb_tf_err_t pb_tf_write_float(struct pb_tf_parser *ps, const pb_tf_field_
 			return pb_tf_fail(ps, PB_TF_ERR_RANGE, start, row->name);
 		}
 		*(float *)dest = (float)v;
-		return PB_TF_OK;
+		return 0;
 	}
 
 	if (data_size == sizeof(double)) {
 		*(double *)dest = v;
-		return PB_TF_OK;
+		return 0;
 	}
 
 	return pb_tf_fail(ps, PB_TF_ERR_INTERNAL, start, row->name);
@@ -1006,7 +1007,7 @@ static pb_tf_err_t pb_tf_write_float(struct pb_tf_parser *ps, const pb_tf_field_
  * With float support off, neither strtod() nor any floating-point formatting is
  * referenced, so neither is linked in. A float field is a clean runtime error.
  */
-static pb_tf_err_t pb_tf_write_float(struct pb_tf_parser *ps, const pb_tf_field_t *row,
+static int pb_tf_write_float(struct pb_tf_parser *ps, const struct pb_tf_field *row,
 				     pb_size_t data_size, void *dest)
 {
 	ARG_UNUSED(data_size);
@@ -1018,12 +1019,12 @@ static pb_tf_err_t pb_tf_write_float(struct pb_tf_parser *ps, const pb_tf_field_
 #endif /* CONFIG_NANOPB_TEXTFORMAT_FLOAT */
 
 /** Parse one non-submessage value of @p row's type into @p dest. */
-static pb_tf_err_t pb_tf_parse_scalar(struct pb_tf_parser *ps, const pb_tf_field_t *row,
+static int pb_tf_parse_scalar(struct pb_tf_parser *ps, const struct pb_tf_field *row,
 				      pb_size_t data_size, void *dest)
 {
 	const char *start = ps->p;
 	struct pb_tf_num n;
-	pb_tf_err_t err;
+	int err;
 
 	switch (row->vtype) {
 	case PB_TF_VT_BOOL:
@@ -1042,7 +1043,7 @@ static pb_tf_err_t pb_tf_parse_scalar(struct pb_tf_parser *ps, const pb_tf_field
 	case PB_TF_VT_SFIXED32:
 	case PB_TF_VT_SFIXED64:
 		err = pb_tf_scan_num(ps, row->name, &n);
-		if (err != PB_TF_OK) {
+		if (err != 0) {
 			return err;
 		}
 		/*
@@ -1100,8 +1101,8 @@ struct pb_tf_slot {
  * The iterator is resolved per occurrence rather than cached, which keeps a
  * field mentioned several times correct and costs only a short scan.
  */
-static pb_tf_err_t pb_tf_resolve_slot(struct pb_tf_parser *ps, const pb_tf_msg_t *tf, void *msg,
-				      const pb_tf_field_t *row, struct pb_tf_slot *out)
+static int pb_tf_resolve_slot(struct pb_tf_parser *ps, const struct pb_tf_msg *tf, void *msg,
+				      const struct pb_tf_field *row, struct pb_tf_slot *out)
 {
 	pb_field_iter_t it;
 
@@ -1182,7 +1183,7 @@ static pb_tf_err_t pb_tf_resolve_slot(struct pb_tf_parser *ps, const pb_tf_msg_t
 		return pb_tf_fail(ps, PB_TF_ERR_UNSUPPORTED, ps->p, row->name);
 	}
 
-	return PB_TF_OK;
+	return 0;
 }
 
 /** Record a completed field. A no-op for SINGULAR and REQUIRED. */
@@ -1207,7 +1208,7 @@ static void pb_tf_commit(void *ptr, pb_size_t val, uint8_t kind)
  * reports PB_TF_ERR_DEPTH rather than a syntax error, and before any state
  * changes so the frame stack cannot be left half-pushed.
  */
-static pb_tf_err_t pb_tf_push(struct pb_tf_parser *ps, const pb_tf_field_t *row,
+static int pb_tf_push(struct pb_tf_parser *ps, const struct pb_tf_field *row,
 			      const struct pb_tf_slot *slot)
 {
 	struct pb_tf_frame *fr;
@@ -1244,7 +1245,7 @@ static pb_tf_err_t pb_tf_push(struct pb_tf_parser *ps, const pb_tf_field_t *row,
 	 * pb_tf_resolve_slot().
 	 */
 
-	return PB_TF_OK;
+	return 0;
 }
 
 /*
@@ -1263,19 +1264,19 @@ static pb_tf_err_t pb_tf_push(struct pb_tf_parser *ps, const pb_tf_field_t *row,
 #define PB_TF_ST_VALUE 1U
 #define PB_TF_ST_AFTER 2U
 
-static pb_tf_err_t pb_tf_run(struct pb_tf_parser *ps)
+static int pb_tf_run(struct pb_tf_parser *ps)
 {
 	unsigned int state = PB_TF_ST_FIELD;
 
 	while (true) {
 		struct pb_tf_frame *fr = &ps->stack[ps->top];
-		pb_tf_err_t err;
+		int err;
 
 		switch (state) {
 		case PB_TF_ST_FIELD: {
 			const char *fstart;
 			size_t nlen;
-			const pb_tf_field_t *row;
+			const struct pb_tf_field *row;
 
 			pb_tf_skip_ws(ps);
 
@@ -1287,7 +1288,7 @@ static pb_tf_err_t pb_tf_run(struct pb_tf_parser *ps)
 
 				if (ps->top == 0U) {
 					/* Outermost body; the caller checks for trailing junk. */
-					return PB_TF_OK;
+					return 0;
 				}
 
 				pb_tf_commit(fr->commit_ptr, fr->commit_val, fr->commit_kind);
@@ -1302,7 +1303,7 @@ static pb_tf_err_t pb_tf_run(struct pb_tf_parser *ps)
 					return pb_tf_fail(ps, PB_TF_ERR_SYNTAX, ps->p, NULL);
 				}
 				/* Only the outermost body may be unbraced. */
-				return PB_TF_OK;
+				return 0;
 			}
 
 			fstart = ps->p;
@@ -1359,7 +1360,7 @@ static pb_tf_err_t pb_tf_run(struct pb_tf_parser *ps)
 			struct pb_tf_slot slot;
 
 			err = pb_tf_resolve_slot(ps, fr->tf, fr->msg, fr->row, &slot);
-			if (err != PB_TF_OK) {
+			if (err != 0) {
 				return err;
 			}
 
@@ -1373,7 +1374,7 @@ static pb_tf_err_t pb_tf_run(struct pb_tf_parser *ps)
 				 * never disturb it.
 				 */
 				err = pb_tf_push(ps, fr->row, &slot);
-				if (err != PB_TF_OK) {
+				if (err != 0) {
 					return err;
 				}
 				state = PB_TF_ST_FIELD;
@@ -1381,7 +1382,7 @@ static pb_tf_err_t pb_tf_run(struct pb_tf_parser *ps)
 			}
 
 			err = pb_tf_parse_scalar(ps, fr->row, slot.data_size, slot.dest);
-			if (err != PB_TF_OK) {
+			if (err != 0) {
 				return err;
 			}
 
@@ -1424,24 +1425,24 @@ static pb_tf_err_t pb_tf_run(struct pb_tf_parser *ps)
 }
 
 /** Shared by pb_tf_parse() and pb_tf_merge(), which differ only in @p clear. */
-static pb_tf_err_t pb_tf_parse_into(const pb_tf_msg_t *tf, void *msg, const char *text, bool clear,
-				    pb_tf_status_t *status)
+static int pb_tf_parse_into(const struct pb_tf_msg *tf, void *msg, const char *text, bool clear,
+				    struct pb_tf_status *status)
 {
 	struct pb_tf_parser ps;
 	struct pb_tf_frame *base;
-	pb_tf_err_t err;
+	int err;
 
 	if (status != NULL) {
-		status->code = PB_TF_OK;
+		status->code = 0;
 		status->offset = 0U;
 		status->field = NULL;
 	}
 
 	if ((tf == NULL) || (msg == NULL) || (text == NULL)) {
 		if (status != NULL) {
-			status->code = PB_TF_ERR_INTERNAL;
+			status->code = -PB_TF_ERR_INTERNAL;
 		}
-		return PB_TF_ERR_INTERNAL;
+		return -PB_TF_ERR_INTERNAL;
 	}
 
 	ps.text = text;
@@ -1476,7 +1477,7 @@ static pb_tf_err_t pb_tf_parse_into(const pb_tf_msg_t *tf, void *msg, const char
 	}
 
 	err = pb_tf_run(&ps);
-	if (err != PB_TF_OK) {
+	if (err != 0) {
 		return err;
 	}
 
@@ -1485,17 +1486,17 @@ static pb_tf_err_t pb_tf_parse_into(const pb_tf_msg_t *tf, void *msg, const char
 		return pb_tf_fail(&ps, PB_TF_ERR_SYNTAX, ps.p, NULL);
 	}
 
-	return PB_TF_OK;
+	return 0;
 }
 
-pb_tf_err_t pb_tf_parse(const pb_tf_msg_t *tf, void *msg, const char *text,
-			pb_tf_status_t *status)
+int pb_tf_parse(const struct pb_tf_msg *tf, void *msg, const char *text,
+			struct pb_tf_status *status)
 {
 	return pb_tf_parse_into(tf, msg, text, true, status);
 }
 
-pb_tf_err_t pb_tf_merge(const pb_tf_msg_t *tf, void *msg, const char *text,
-			pb_tf_status_t *status)
+int pb_tf_merge(const struct pb_tf_msg *tf, void *msg, const char *text,
+			struct pb_tf_status *status)
 {
 	return pb_tf_parse_into(tf, msg, text, false, status);
 }

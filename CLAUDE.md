@@ -305,7 +305,7 @@ function signatures:
 **MAJOR**
 
 - Removing, renaming or re-signaturing any of the six public functions or the two macros.
-- Changing the layout of `pb_tf_field_t` or `pb_tf_msg_t`. `PB_TF_DEFINE` bakes those structs into
+- Changing the layout of `struct pb_tf_field` or `struct pb_tf_msg`. `PB_TF_DEFINE` bakes those structs into
   *user* object files, so a layout change is an ABI break: everything must be recompiled, and a stale
   object file will read garbage rather than fail to link.
 - **Narrowing the dialect** — input that used to parse now errors. `docs/dialect.md` is a contract,
@@ -345,19 +345,38 @@ Two release obligations that are easy to forget:
 All public symbols are `pb_tf_*` / `PB_TF_*`; the Kconfig namespace is `NANOPB_TEXTFORMAT_*`; the
 module is `nanopb_textformat` and the header `nanopb_textformat.h`.
 
+Zephyr conventions, and neither is negotiable here:
+
+- **No `typedef`s.** Types are spelled `struct pb_tf_msg`, `struct pb_tf_status`,
+  `enum pb_tf_err`. The library shipped `_t` aliases up to 0.6.0; they are gone.
+- **Functions return `int`: 0 on success, a negated `enum pb_tf_err` on failure.** The enumerators
+  stay positive, so a caller compares against `-PB_TF_ERR_RANGE`. `pb_tf_strerror()` normalises the
+  sign so a return value or a `status.code` can be passed straight in. `status.code` stores the
+  negated form for the same reason.
+
+Watch for two shapes the mechanical conversion missed once already: a `return X ? PB_TF_ERR_A : ...`
+ternary is not `return PB_TF_ERR_A;`, and a test comparing against a positive enumerator still
+compiles while always failing.
+
 Internal helpers belong in `src/nanopb_textformat_priv.h`, not the public header — the public API is
 deliberately seven functions (`parse`, `merge`, `print`, `print_buf`, `clear`, `strerror`,
 `out_buf`) plus the `PB_TF_DEFINE` / `PB_TF_DECLARE` macros.
 
-**There are no runtime flags, and do not reintroduce any.** Output style is a Kconfig choice
-(`NANOPB_TEXTFORMAT_PRINT_MULTILINE` / `_COMPACT`, plus `_BRACES` and `_SKIP_DEFAULTS`), read through
-`IS_ENABLED` so the unused branch is discarded; replace-versus-merge is `pb_tf_parse()` versus
-`pb_tf_merge()`. A build states its intent once instead of at every call site.
+**No runtime flags, and no style-agnostic print.** The line style and the braces are in the function
+name -- `pb_tf_print_buf_compact()`, `pb_tf_print_multiline_braces()` and so on, eight in all -- so a
+call site says what it produces and one firmware can use several shapes. Replace-versus-merge is
+likewise `pb_tf_parse()` versus `pb_tf_merge()`.
 
-The consequence for tests: a single build can only print one way, so style-dependent assertions
-either check substrings (holding in every configuration) or pick their expected string from
-`IS_ENABLED`, and `testcase.yaml` runs the style combinations as separate scenarios. Adding a style
-option means adding a scenario, or it is untested.
+Do not add a `pb_tf_print()` that reads the style from Kconfig: that was the arrangement up to 0.5.0,
+and its problem is that reading a call site tells you nothing about the output. Only
+`_PRINT_SKIP_DEFAULTS` stays Kconfig, because making it per-call would double eight entry points to
+sixteen and no firmware wants it both ways.
+
+Each wrapper is 16-20 bytes on Cortex-M3 and `--gc-sections` drops the ones an application does not
+call, so the count costs nothing. They are deliberately real functions rather than `static inline`:
+inlining would need the two-boolean styled function exposed in the public header, which is the
+unreadable-argument API the naming exists to avoid, and it would buy one branch against the 992 bytes
+`pb_tf_print_styled` spends formatting.
 
 `docs/dialect.md` is a contract, not a description. If you change what is accepted or printed, update
 it in the same commit, and keep the guarantee it opens with true: everything accepted is valid text

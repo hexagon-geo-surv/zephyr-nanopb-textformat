@@ -53,7 +53,7 @@ ZTEST(pb_tf_split, test_common_half_survives_either_way)
 	zassert_not_null(pb_tf_strerror(PB_TF_ERR_UNSUPPORTED));
 
 	char buf[8] = "";
-	pb_tf_buf_t sink = {.buf = buf, .size = sizeof(buf)};
+	struct pb_tf_buf sink = {.buf = buf, .size = sizeof(buf)};
 
 	(void)pb_tf_out_buf('x', &sink);
 	zassert_str_equal(buf, "x");
@@ -72,8 +72,8 @@ ZTEST(pb_tf_split, test_at_least_one_half_is_built)
 ZTEST(pb_tf_split, test_parse_half_alone)
 {
 	Split m;
-	pb_tf_status_t st;
-	pb_tf_err_t err;
+	struct pb_tf_status st;
+	int err;
 
 	err = pb_tf_parse(&Split_tf, &m, "a: 7 b: [1, 2] sub { v: -3 } name: \"hi\"", &st);
 	zassert_equal(err, PB_TF_OK, "%s", pb_tf_strerror(st.code));
@@ -89,7 +89,7 @@ ZTEST(pb_tf_split, test_parse_half_alone)
 	zassert_equal(m.a, 7, "merge keeps what is there");
 
 	/* Errors still carry an offset and a field name. */
-	zassert_equal(pb_tf_parse(&Split_tf, &m, "a: -1", &st), PB_TF_ERR_RANGE);
+	zassert_equal(pb_tf_parse(&Split_tf, &m, "a: -1", &st), -PB_TF_ERR_RANGE);
 	zassert_str_equal(st.field, "a");
 }
 
@@ -114,7 +114,7 @@ ZTEST(pb_tf_split, test_print_half_alone)
 	};
 	char out[128];
 
-	zassert_equal(pb_tf_print_buf(&Split_tf, &m, out, sizeof(out)), PB_TF_OK);
+	zassert_equal(pb_tf_print_buf_multiline(&Split_tf, &m, out, sizeof(out)), PB_TF_OK);
 
 	zassert_not_null(strstr(out, "a: 7"), "got %s", out);
 	zassert_not_null(strstr(out, "b: 1"), "got %s", out);
@@ -125,7 +125,7 @@ ZTEST(pb_tf_split, test_print_half_alone)
 	/* Truncation is still reported rather than silently dropped. */
 	char tiny[4];
 
-	zassert_equal(pb_tf_print_buf(&Split_tf, &m, tiny, sizeof(tiny)), PB_TF_ERR_NO_SPACE);
+	zassert_equal(pb_tf_print_buf_multiline(&Split_tf, &m, tiny, sizeof(tiny)), -PB_TF_ERR_NO_SPACE);
 	zassert_true(strlen(tiny) < sizeof(tiny));
 }
 

@@ -102,9 +102,9 @@ This is unambiguous: a top-level text-format `Message` can only begin with a fie
 leading `{` cannot be anything else. It is only safe because the matching `}` is **required to be the
 last token** — `{a: 1} junk` is an error.
 
-On **output** braces are a separate, off-by-default Kconfig option
-(`CONFIG_NANOPB_TEXTFORMAT_PRINT_BRACES`), so compact output is valid standalone text format that
-`protoc` will parse as-is.
+On **output** braces are chosen by which function you call — `pb_tf_print_buf_compact()` emits none,
+`pb_tf_print_buf_compact_braces()` emits them — so the brace-free forms produce valid standalone text
+format that `protoc` will parse as-is.
 
 ## Semantics worth knowing
 
@@ -247,6 +247,6 @@ spelling for a normal field but could differ for a `oneof` member, because the o
 | `PB_TF_ERR_NO_FLOAT` | float field with `CONFIG_NANOPB_TEXTFORMAT_FLOAT=n` |
 | `PB_TF_ERR_INTERNAL` | descriptor inconsistency: a bug here, or a nanopb mismatch |
 
-`pb_tf_status_t` carries the byte `offset` into the input and, where one was in scope, the `field`
+`struct pb_tf_status` carries the byte `offset` into the input and, where one was in scope, the `field`
 name. The strings name only the fault, so a caller can append context without repeating a word:
 `at offset 14: value out of range in field 'threshold'`.

@@ -54,7 +54,7 @@ bool pb_tf_vtype_is_msg(uint8_t vtype);
  *
  * @return the row, or NULL if no field matches.
  */
-const pb_tf_field_t *pb_tf_field_find(const pb_tf_msg_t *tf, const char *name, size_t len);
+const struct pb_tf_field *pb_tf_field_find(const struct pb_tf_msg *tf, const char *name, size_t len);
 
 /**
  * True if this field's shape can be read or written at all.
@@ -63,6 +63,6 @@ const pb_tf_field_t *pb_tf_field_find(const pb_tf_msg_t *tf, const char *name, s
  * FIXARRAY (nanopb's fixed_count: there is no count member to grow, and
  * iter.pSize aliases the iterator itself), and EXTENSION fields.
  */
-bool pb_tf_shape_supported(const pb_tf_field_t *f);
+bool pb_tf_shape_supported(const struct pb_tf_field *f);
 
 #endif /* NANOPB_TEXTFORMAT_PRIV_H_ */

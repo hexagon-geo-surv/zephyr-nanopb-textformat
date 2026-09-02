@@ -100,7 +100,7 @@ ZTEST(pb_tf_macro, test_descriptor_matches_nanopb)
 /* Names come from #fieldname, and lookup is by exact match. */
 ZTEST(pb_tf_macro, test_field_names_and_tags)
 {
-	const pb_tf_field_t *f = &fx_scalars_t_tf.fields[0];
+	const struct pb_tf_field *f = &fx_scalars_t_tf.fields[0];
 
 	zassert_str_equal(f->name, "f_int32");
 	zassert_equal(f->tag, FX_SCALARS_F_INT32_TAG);
@@ -119,9 +119,9 @@ ZTEST(pb_tf_macro, test_field_names_and_tags)
  */
 ZTEST(pb_tf_macro, test_vtype_preserves_what_nanopb_loses)
 {
-	const pb_tf_field_t *fl = pb_tf_field_find(&fx_scalars_t_tf, "f_float", 7);
-	const pb_tf_field_t *fx = pb_tf_field_find(&fx_scalars_t_tf, "f_fixed32", 9);
-	const pb_tf_field_t *sf = pb_tf_field_find(&fx_scalars_t_tf, "f_sfixed32", 10);
+	const struct pb_tf_field *fl = pb_tf_field_find(&fx_scalars_t_tf, "f_float", 7);
+	const struct pb_tf_field *fx = pb_tf_field_find(&fx_scalars_t_tf, "f_fixed32", 9);
+	const struct pb_tf_field *sf = pb_tf_field_find(&fx_scalars_t_tf, "f_sfixed32", 10);
 
 	zassert_not_null(fl);
 	zassert_not_null(fx);
@@ -143,7 +143,7 @@ ZTEST(pb_tf_macro, test_vtype_preserves_what_nanopb_loses)
  */
 ZTEST(pb_tf_macro, test_rules_preserve_htype)
 {
-	const pb_tf_msg_t *tf = &fx_shapes_t_tf;
+	const struct pb_tf_msg *tf = &fx_shapes_t_tf;
 
 	zassert_equal(PB_TF_HT(pb_tf_field_find(tf, "plain_scalar", 12)->rules),
 		      PB_TF_HT_SINGULAR);
@@ -164,8 +164,8 @@ ZTEST(pb_tf_macro, test_rules_preserve_htype)
  */
 ZTEST(pb_tf_macro, test_singular_and_optional_submessage_are_identical)
 {
-	const pb_tf_field_t *s = pb_tf_field_find(&fx_shapes_t_tf, "sing_msg", 8);
-	const pb_tf_field_t *o = pb_tf_field_find(&fx_shapes_t_tf, "opt_msg", 7);
+	const struct pb_tf_field *s = pb_tf_field_find(&fx_shapes_t_tf, "sing_msg", 8);
+	const struct pb_tf_field *o = pb_tf_field_find(&fx_shapes_t_tf, "opt_msg", 7);
 
 	zassert_equal(s->vtype, PB_TF_VT_MESSAGE);
 	zassert_equal(o->vtype, PB_TF_VT_MESSAGE);
@@ -175,9 +175,9 @@ ZTEST(pb_tf_macro, test_singular_and_optional_submessage_are_identical)
 /* The recursive tree: a message row points at the submessage's descriptor. */
 ZTEST(pb_tf_macro, test_submessage_descriptors_are_linked)
 {
-	const pb_tf_field_t *sing = pb_tf_field_find(&fx_shapes_t_tf, "sing_msg", 8);
-	const pb_tf_field_t *rep = pb_tf_field_find(&fx_shapes_t_tf, "rep_msg", 7);
-	const pb_tf_field_t *cmsg = pb_tf_field_find(&fx_shapes_t_tf, "c_msg", 5);
+	const struct pb_tf_field *sing = pb_tf_field_find(&fx_shapes_t_tf, "sing_msg", 8);
+	const struct pb_tf_field *rep = pb_tf_field_find(&fx_shapes_t_tf, "rep_msg", 7);
+	const struct pb_tf_field *cmsg = pb_tf_field_find(&fx_shapes_t_tf, "c_msg", 5);
 
 	/* Defined before fx_inner_t_tf in this file, so this also proves the
 	 * PB_TF_GEN_EXTERN forward declarations work.
@@ -301,7 +301,7 @@ ZTEST(pb_tf_macro, test_clear_zeroes_whole_struct)
 ZTEST(pb_tf_macro, test_out_buf_terminates_and_flags_overflow)
 {
 	char small[4];
-	pb_tf_buf_t b = {.buf = small, .size = sizeof(small)};
+	struct pb_tf_buf b = {.buf = small, .size = sizeof(small)};
 
 	for (int i = 0; i < 3; i++) {
 		(void)pb_tf_out_buf('x', &b);
@@ -318,7 +318,7 @@ ZTEST(pb_tf_macro, test_out_buf_terminates_and_flags_overflow)
 ZTEST(pb_tf_macro, test_strerror_covers_every_code)
 {
 	for (int c = PB_TF_OK; c <= PB_TF_ERR_INTERNAL; c++) {
-		const char *s = pb_tf_strerror((pb_tf_err_t)c);
+		const char *s = pb_tf_strerror((int)c);
 
 		zassert_not_null(s);
 		zassert_true(strlen(s) > 0U);
@@ -349,9 +349,9 @@ static uint16_t off_of(const char *hay, const char *needle)
 ZTEST(pb_tf_parse, test_singular_scalar)
 {
 	fx_shapes_t m;
-	pb_tf_status_t st;
+	struct pb_tf_status st;
 
-	pb_tf_err_t err = pb_tf_parse(&fx_shapes_t_tf, &m, "plain_scalar: 42", &st);
+	int err = pb_tf_parse(&fx_shapes_t_tf, &m, "plain_scalar: 42", &st);
 
 	zassert_equal(err, PB_TF_OK, "%s", pb_tf_strerror(st.code));
 	zassert_equal(m.plain_scalar, 42);
@@ -427,9 +427,9 @@ ZTEST(pb_tf_parse, test_separators_are_optional)
 
 	ARRAY_FOR_EACH(forms, i) {
 		fx_shapes_t m;
-		pb_tf_status_t st;
+		struct pb_tf_status st;
 
-		pb_tf_err_t err = pb_tf_parse(&fx_shapes_t_tf, &m, forms[i], &st);
+		int err = pb_tf_parse(&fx_shapes_t_tf, &m, forms[i], &st);
 
 		zassert_equal(err, PB_TF_OK, "form %zu (%s): %s", i, forms[i],
 			      pb_tf_strerror(st.code));
@@ -476,9 +476,9 @@ ZTEST(pb_tf_parse, test_integer_bases)
 
 	ARRAY_FOR_EACH(cases, i) {
 		fx_scalars_t m;
-		pb_tf_status_t st;
+		struct pb_tf_status st;
 
-		pb_tf_err_t err = pb_tf_parse(&fx_scalars_t_tf, &m, cases[i].text, &st);
+		int err = pb_tf_parse(&fx_scalars_t_tf, &m, cases[i].text, &st);
 
 		zassert_equal(err, PB_TF_OK, "'%s': %s", cases[i].text, pb_tf_strerror(st.code));
 		zassert_equal(m.f_int32, cases[i].want, "'%s' gave %d", cases[i].text,
@@ -499,9 +499,9 @@ ZTEST(pb_tf_parse, test_bool_spellings)
 
 	ARRAY_FOR_EACH(cases, i) {
 		fx_scalars_t m;
-		pb_tf_status_t st;
+		struct pb_tf_status st;
 
-		pb_tf_err_t err = pb_tf_parse(&fx_scalars_t_tf, &m, cases[i].text, &st);
+		int err = pb_tf_parse(&fx_scalars_t_tf, &m, cases[i].text, &st);
 
 		zassert_equal(err, PB_TF_OK, "'%s': %s", cases[i].text, pb_tf_strerror(st.code));
 		zassert_equal(m.f_bool, cases[i].want, "'%s'", cases[i].text);
@@ -512,9 +512,9 @@ ZTEST(pb_tf_parse, test_bool_spellings)
 ZTEST(pb_tf_parse, test_enums_are_numeric)
 {
 	fx_scalars_t m;
-	pb_tf_status_t st;
+	struct pb_tf_status st;
 
-	pb_tf_err_t err = pb_tf_parse(&fx_scalars_t_tf, &m, "f_uenum: 2 f_enum: -1", &st);
+	int err = pb_tf_parse(&fx_scalars_t_tf, &m, "f_uenum: 2 f_enum: -1", &st);
 
 	zassert_equal(err, PB_TF_OK, "%s", pb_tf_strerror(st.code));
 	/*
@@ -529,7 +529,7 @@ ZTEST(pb_tf_parse, test_enums_are_numeric)
 
 	/* By name is out of scope, and must not silently succeed. */
 	zassert_equal(pb_tf_parse(&fx_scalars_t_tf, &m, "f_uenum: FX_MODE_FAST", &st),
-		      PB_TF_ERR_SYNTAX);
+		      -PB_TF_ERR_SYNTAX);
 }
 
 /*
@@ -540,7 +540,7 @@ ZTEST(pb_tf_parse, test_enums_are_numeric)
 ZTEST(pb_tf_parse, test_narrowed_widths_range_check)
 {
 	fx_scalars_t m;
-	pb_tf_status_t st;
+	struct pb_tf_status st;
 
 	/* int_size:IS_8 -> int8_t. */
 	zassert_equal(sizeof(m.f_narrow), 1);
@@ -550,10 +550,10 @@ ZTEST(pb_tf_parse, test_narrowed_widths_range_check)
 	zassert_equal(m.f_narrow, -128);
 
 	zassert_equal(pb_tf_parse(&fx_scalars_t_tf, &m, "f_narrow: 128", &st),
-		      PB_TF_ERR_RANGE, "128 must not truncate into an int8_t");
+		      -PB_TF_ERR_RANGE, "128 must not truncate into an int8_t");
 	zassert_str_equal(st.field, "f_narrow");
 	zassert_equal(pb_tf_parse(&fx_scalars_t_tf, &m, "f_narrow: -129", NULL),
-		      PB_TF_ERR_RANGE);
+		      -PB_TF_ERR_RANGE);
 
 	/* int_size:IS_32 on a proto int64 -> int32_t. */
 	zassert_equal(sizeof(m.f_narrow32), 4);
@@ -561,15 +561,15 @@ ZTEST(pb_tf_parse, test_narrowed_widths_range_check)
 		      PB_TF_OK);
 	zassert_equal(m.f_narrow32, INT32_MAX);
 	zassert_equal(pb_tf_parse(&fx_scalars_t_tf, &m, "f_narrow32: 2147483648", NULL),
-		      PB_TF_ERR_RANGE);
+		      -PB_TF_ERR_RANGE);
 }
 
 ZTEST(pb_tf_parse, test_unsigned_rejects_negative)
 {
 	fx_scalars_t m;
-	pb_tf_status_t st;
+	struct pb_tf_status st;
 
-	zassert_equal(pb_tf_parse(&fx_scalars_t_tf, &m, "f_uint32: -1", &st), PB_TF_ERR_RANGE,
+	zassert_equal(pb_tf_parse(&fx_scalars_t_tf, &m, "f_uint32: -1", &st), -PB_TF_ERR_RANGE,
 		      "a negative literal must not wrap into an unsigned field");
 	zassert_str_equal(st.field, "f_uint32");
 
@@ -577,16 +577,16 @@ ZTEST(pb_tf_parse, test_unsigned_rejects_negative)
 		      PB_TF_OK);
 	zassert_equal(m.f_uint32, UINT32_MAX);
 	zassert_equal(pb_tf_parse(&fx_scalars_t_tf, &m, "f_uint32: 4294967296", NULL),
-		      PB_TF_ERR_RANGE);
+		      -PB_TF_ERR_RANGE);
 }
 
 /* sint and fixed widths take the same path as the plain varints. */
 ZTEST(pb_tf_parse, test_sint_and_fixed_widths)
 {
 	fx_scalars_t m;
-	pb_tf_status_t st;
+	struct pb_tf_status st;
 
-	pb_tf_err_t err = pb_tf_parse(
+	int err = pb_tf_parse(
 		&fx_scalars_t_tf, &m, "f_sint32: -5 f_fixed32: 4294967295 f_sfixed32: -2147483648",
 		&st);
 
@@ -604,13 +604,13 @@ ZTEST(pb_tf_parse, test_sint_and_fixed_widths)
 ZTEST(pb_tf_parse, test_64bit_fields_follow_the_build)
 {
 	fx_scalars_t m;
-	pb_tf_status_t st;
-	pb_tf_err_t err = pb_tf_parse(&fx_scalars_t_tf, &m, "f_int64: 1", &st);
+	struct pb_tf_status st;
+	int err = pb_tf_parse(&fx_scalars_t_tf, &m, "f_int64: 1", &st);
 
 	zassert_equal(sizeof(m.f_int64), 8, "the generator never narrows this");
 
 	if (IS_ENABLED(CONFIG_NANOPB_WITHOUT_64BIT)) {
-		zassert_equal(err, PB_TF_ERR_UNSUPPORTED, "got %s", pb_tf_strerror(err));
+		zassert_equal(err, -PB_TF_ERR_UNSUPPORTED, "got %s", pb_tf_strerror(err));
 		zassert_str_equal(st.field, "f_int64");
 	} else {
 		zassert_equal(err, PB_TF_OK, "%s", pb_tf_strerror(st.code));
@@ -626,16 +626,16 @@ ZTEST(pb_tf_parse, test_64bit_fields_follow_the_build)
 		zassert_equal(m.f_int64, INT64_MIN);
 		zassert_equal(pb_tf_parse(&fx_scalars_t_tf, &m,
 					  "f_int64: 9223372036854775808", NULL),
-			      PB_TF_ERR_RANGE);
+			      -PB_TF_ERR_RANGE);
 	}
 }
 
 ZTEST(pb_tf_parse, test_oneof_selects_member)
 {
 	fx_shapes_t m;
-	pb_tf_status_t st;
+	struct pb_tf_status st;
 
-	pb_tf_err_t err = pb_tf_parse(&fx_shapes_t_tf, &m, "c_num: 77", &st);
+	int err = pb_tf_parse(&fx_shapes_t_tf, &m, "c_num: 77", &st);
 
 	zassert_equal(err, PB_TF_OK, "%s", pb_tf_strerror(st.code));
 	zassert_equal(m.which_choice, FX_SHAPES_C_NUM_TAG);
@@ -677,13 +677,13 @@ ZTEST(pb_tf_parse, test_clear_and_noinit)
 ZTEST(pb_tf_parse, test_float_field_follows_the_build)
 {
 	fx_scalars_t m;
-	pb_tf_status_t st;
-	pb_tf_err_t err = pb_tf_parse(&fx_scalars_t_tf, &m, "f_float: 1.5", &st);
+	struct pb_tf_status st;
+	int err = pb_tf_parse(&fx_scalars_t_tf, &m, "f_float: 1.5", &st);
 
 	if (IS_ENABLED(CONFIG_NANOPB_TEXTFORMAT_FLOAT)) {
 		zassert_equal(err, PB_TF_OK, "%s", pb_tf_strerror(st.code));
 	} else {
-		zassert_equal(err, PB_TF_ERR_NO_FLOAT, "got %s", pb_tf_strerror(err));
+		zassert_equal(err, -PB_TF_ERR_NO_FLOAT, "got %s", pb_tf_strerror(err));
 		zassert_str_equal(st.field, "f_float");
 	}
 }
@@ -699,10 +699,10 @@ ZTEST_SUITE(pb_tf_errors, NULL, NULL, NULL, NULL, NULL);
 ZTEST(pb_tf_errors, test_unknown_field)
 {
 	fx_shapes_t m;
-	pb_tf_status_t st;
+	struct pb_tf_status st;
 	const char *txt = "plain_scalar: 1 nosuchfield: 2";
 
-	zassert_equal(pb_tf_parse(&fx_shapes_t_tf, &m, txt, &st), PB_TF_ERR_UNKNOWN_FIELD);
+	zassert_equal(pb_tf_parse(&fx_shapes_t_tf, &m, txt, &st), -PB_TF_ERR_UNKNOWN_FIELD);
 	zassert_equal(st.offset, off_of(txt, "nosuchfield"), "got offset %u", st.offset);
 	zassert_is_null(st.field, "there is no field to name");
 }
@@ -710,20 +710,20 @@ ZTEST(pb_tf_errors, test_unknown_field)
 ZTEST(pb_tf_errors, test_missing_colon)
 {
 	fx_shapes_t m;
-	pb_tf_status_t st;
+	struct pb_tf_status st;
 
 	zassert_equal(pb_tf_parse(&fx_shapes_t_tf, &m, "plain_scalar 1", &st),
-		      PB_TF_ERR_SYNTAX);
+		      -PB_TF_ERR_SYNTAX);
 	zassert_str_equal(st.field, "plain_scalar");
 }
 
 ZTEST(pb_tf_errors, test_unterminated_brace)
 {
 	fx_shapes_t m;
-	pb_tf_status_t st;
+	struct pb_tf_status st;
 
 	zassert_equal(pb_tf_parse(&fx_shapes_t_tf, &m, "{plain_scalar: 1", &st),
-		      PB_TF_ERR_SYNTAX);
+		      -PB_TF_ERR_SYNTAX);
 	zassert_equal(st.offset, strlen("{plain_scalar: 1"), "must point at end of input");
 }
 
@@ -731,23 +731,23 @@ ZTEST(pb_tf_errors, test_unterminated_brace)
 ZTEST(pb_tf_errors, test_trailing_junk_after_brace)
 {
 	fx_shapes_t m;
-	pb_tf_status_t st;
+	struct pb_tf_status st;
 	const char *txt = "{plain_scalar: 1} junk";
 
-	zassert_equal(pb_tf_parse(&fx_shapes_t_tf, &m, txt, &st), PB_TF_ERR_SYNTAX);
+	zassert_equal(pb_tf_parse(&fx_shapes_t_tf, &m, txt, &st), -PB_TF_ERR_SYNTAX);
 	zassert_equal(st.offset, off_of(txt, "junk"));
 
 	zassert_equal(pb_tf_parse(&fx_shapes_t_tf, &m, "plain_scalar: 1 }", &st),
-		      PB_TF_ERR_SYNTAX, "an unopened '}' is not a field name either");
+		      -PB_TF_ERR_SYNTAX, "an unopened '}' is not a field name either");
 }
 
 ZTEST(pb_tf_errors, test_list_on_non_repeated_field)
 {
 	fx_shapes_t m;
-	pb_tf_status_t st;
+	struct pb_tf_status st;
 	const char *txt = "plain_scalar: [1, 2]";
 
-	zassert_equal(pb_tf_parse(&fx_shapes_t_tf, &m, txt, &st), PB_TF_ERR_SYNTAX);
+	zassert_equal(pb_tf_parse(&fx_shapes_t_tf, &m, txt, &st), -PB_TF_ERR_SYNTAX);
 	zassert_equal(st.offset, off_of(txt, "["));
 	zassert_str_equal(st.field, "plain_scalar");
 }
@@ -755,16 +755,16 @@ ZTEST(pb_tf_errors, test_list_on_non_repeated_field)
 ZTEST(pb_tf_errors, test_repeated_past_capacity)
 {
 	fx_shapes_t m;
-	pb_tf_status_t st;
+	struct pb_tf_status st;
 
 	/* max_count is 4. */
-	pb_tf_err_t err = pb_tf_parse(&fx_shapes_t_tf, &m, "rep_scalar: [1,2,3,4]", &st);
+	int err = pb_tf_parse(&fx_shapes_t_tf, &m, "rep_scalar: [1,2,3,4]", &st);
 
 	zassert_equal(err, PB_TF_OK, "%s", pb_tf_strerror(st.code));
 	zassert_equal(m.rep_scalar_count, 4);
 
 	zassert_equal(pb_tf_parse(&fx_shapes_t_tf, &m, "rep_scalar: [1,2,3,4,5]", &st),
-		      PB_TF_ERR_TOO_MANY);
+		      -PB_TF_ERR_TOO_MANY);
 	zassert_str_equal(st.field, "rep_scalar");
 	zassert_equal(m.rep_scalar_count, 4, "the count must not exceed the array");
 }
@@ -773,10 +773,10 @@ ZTEST(pb_tf_errors, test_repeated_past_capacity)
 ZTEST(pb_tf_errors, test_failed_element_is_not_committed)
 {
 	fx_shapes_t m;
-	pb_tf_status_t st;
+	struct pb_tf_status st;
 
 	zassert_equal(pb_tf_parse(&fx_shapes_t_tf, &m, "rep_scalar: [1, -2]", &st),
-		      PB_TF_ERR_RANGE);
+		      -PB_TF_ERR_RANGE);
 	zassert_equal(m.rep_scalar_count, 1, "only the good element counts");
 	zassert_equal(m.rep_scalar[0], 1);
 }
@@ -784,39 +784,39 @@ ZTEST(pb_tf_errors, test_failed_element_is_not_committed)
 ZTEST(pb_tf_errors, test_float_literal_in_integer_field)
 {
 	fx_scalars_t m;
-	pb_tf_status_t st;
+	struct pb_tf_status st;
 
-	zassert_equal(pb_tf_parse(&fx_scalars_t_tf, &m, "f_int32: 1.5", &st), PB_TF_ERR_TYPE);
+	zassert_equal(pb_tf_parse(&fx_scalars_t_tf, &m, "f_int32: 1.5", &st), -PB_TF_ERR_TYPE);
 	zassert_str_equal(st.field, "f_int32");
 
 	zassert_equal(pb_tf_parse(&fx_scalars_t_tf, &m, "f_int32: 1e3", NULL),
-		      PB_TF_ERR_TYPE);
-	zassert_equal(pb_tf_parse(&fx_scalars_t_tf, &m, "f_int32: 1f", NULL), PB_TF_ERR_TYPE);
+		      -PB_TF_ERR_TYPE);
+	zassert_equal(pb_tf_parse(&fx_scalars_t_tf, &m, "f_int32: 1f", NULL), -PB_TF_ERR_TYPE);
 }
 
 ZTEST(pb_tf_errors, test_bad_bool_word)
 {
 	fx_scalars_t m;
-	pb_tf_status_t st;
+	struct pb_tf_status st;
 
-	zassert_equal(pb_tf_parse(&fx_scalars_t_tf, &m, "f_bool: yes", &st), PB_TF_ERR_TYPE);
+	zassert_equal(pb_tf_parse(&fx_scalars_t_tf, &m, "f_bool: yes", &st), -PB_TF_ERR_TYPE);
 	zassert_str_equal(st.field, "f_bool");
-	zassert_equal(pb_tf_parse(&fx_scalars_t_tf, &m, "f_bool: 2", NULL), PB_TF_ERR_RANGE);
+	zassert_equal(pb_tf_parse(&fx_scalars_t_tf, &m, "f_bool: 2", NULL), -PB_TF_ERR_RANGE);
 }
 
 ZTEST(pb_tf_errors, test_malformed_numbers)
 {
 	static const struct {
 		const char *text;
-		pb_tf_err_t want;
+		int want;
 	} cases[] = {
-		{"f_int32:", PB_TF_ERR_SYNTAX},
-		{"f_int32: ", PB_TF_ERR_SYNTAX},
-		{"f_int32: -", PB_TF_ERR_SYNTAX},
-		{"f_int32: 0x", PB_TF_ERR_SYNTAX},
-		{"f_int32: +1", PB_TF_ERR_SYNTAX},
-		{"f_int32: 09", PB_TF_ERR_SYNTAX},
-		{"f_int32: 99999999999999999999999999", PB_TF_ERR_RANGE},
+		{"f_int32:", -PB_TF_ERR_SYNTAX},
+		{"f_int32: ", -PB_TF_ERR_SYNTAX},
+		{"f_int32: -", -PB_TF_ERR_SYNTAX},
+		{"f_int32: 0x", -PB_TF_ERR_SYNTAX},
+		{"f_int32: +1", -PB_TF_ERR_SYNTAX},
+		{"f_int32: 09", -PB_TF_ERR_SYNTAX},
+		{"f_int32: 99999999999999999999999999", -PB_TF_ERR_RANGE},
 	};
 
 	ARRAY_FOR_EACH(cases, i) {
@@ -831,10 +831,10 @@ ZTEST(pb_tf_errors, test_malformed_numbers)
 ZTEST(pb_tf_errors, test_fixarray_is_unsupported)
 {
 	fx_shapes_t m;
-	pb_tf_status_t st;
+	struct pb_tf_status st;
 	const char *txt = "fixed_scalar: [1, 2]";
 
-	zassert_equal(pb_tf_parse(&fx_shapes_t_tf, &m, txt, &st), PB_TF_ERR_UNSUPPORTED);
+	zassert_equal(pb_tf_parse(&fx_shapes_t_tf, &m, txt, &st), -PB_TF_ERR_UNSUPPORTED);
 	zassert_equal(st.offset, off_of(txt, "fixed_scalar"));
 	zassert_str_equal(st.field, "fixed_scalar");
 }
@@ -843,25 +843,25 @@ ZTEST(pb_tf_errors, test_fixarray_is_unsupported)
 ZTEST(pb_tf_errors, test_empty_message_rejects_any_field)
 {
 	fx_empty_t m;
-	pb_tf_status_t st;
+	struct pb_tf_status st;
 
 	zassert_equal(pb_tf_parse(&fx_empty_t_tf, &m, "", &st), PB_TF_OK);
 	zassert_equal(pb_tf_parse(&fx_empty_t_tf, &m, "{}", &st), PB_TF_OK);
 	zassert_equal(pb_tf_parse(&fx_empty_t_tf, &m, "anything: 1", &st),
-		      PB_TF_ERR_UNKNOWN_FIELD);
+		      -PB_TF_ERR_UNKNOWN_FIELD);
 }
 
 ZTEST(pb_tf_errors, test_status_is_optional_and_reset)
 {
 	fx_shapes_t m;
-	pb_tf_status_t st;
+	struct pb_tf_status st;
 
 	/* NULL status must not crash. */
 	zassert_equal(pb_tf_parse(&fx_shapes_t_tf, &m, "plain_scalar: 1", NULL), PB_TF_OK);
 
 	/* A stale failure must be cleared on the next success. */
 	zassert_equal(pb_tf_parse(&fx_shapes_t_tf, &m, "bogus: 1", &st),
-		      PB_TF_ERR_UNKNOWN_FIELD);
+		      -PB_TF_ERR_UNKNOWN_FIELD);
 	zassert_equal(pb_tf_parse(&fx_shapes_t_tf, &m, "plain_scalar: 1", &st), PB_TF_OK);
 	zassert_equal(st.code, PB_TF_OK);
 	zassert_equal(st.offset, 0);
@@ -872,9 +872,9 @@ ZTEST(pb_tf_errors, test_null_arguments)
 {
 	fx_shapes_t m;
 
-	zassert_equal(pb_tf_parse(NULL, &m, "", NULL), PB_TF_ERR_INTERNAL);
-	zassert_equal(pb_tf_parse(&fx_shapes_t_tf, NULL, "", NULL), PB_TF_ERR_INTERNAL);
-	zassert_equal(pb_tf_parse(&fx_shapes_t_tf, &m, NULL, NULL), PB_TF_ERR_INTERNAL);
+	zassert_equal(pb_tf_parse(NULL, &m, "", NULL), -PB_TF_ERR_INTERNAL);
+	zassert_equal(pb_tf_parse(&fx_shapes_t_tf, NULL, "", NULL), -PB_TF_ERR_INTERNAL);
+	zassert_equal(pb_tf_parse(&fx_shapes_t_tf, &m, NULL, NULL), -PB_TF_ERR_INTERNAL);
 }
 
 /*
@@ -887,9 +887,9 @@ ZTEST(pb_tf_errors, test_null_arguments)
 ZTEST(pb_tf_parse, test_anonymous_oneof)
 {
 	fx_anon_t m;
-	pb_tf_status_t st;
-	pb_tf_err_t err;
-	const pb_tf_field_t *f;
+	struct pb_tf_status st;
+	int err;
+	const struct pb_tf_field *f;
 
 	/* The rows carry the member names, not the union name. */
 	f = pb_tf_field_find(&fx_anon_t_tf, "p_num", 5);
@@ -931,8 +931,8 @@ ZTEST(pb_tf_submsg, test_colon_is_optional_before_braces)
 
 	ARRAY_FOR_EACH(forms, i) {
 		fx_shapes_t m;
-		pb_tf_status_t st;
-		pb_tf_err_t err = pb_tf_parse(&fx_shapes_t_tf, &m, forms[i], &st);
+		struct pb_tf_status st;
+		int err = pb_tf_parse(&fx_shapes_t_tf, &m, forms[i], &st);
 
 		zassert_equal(err, PB_TF_OK, "form %zu (%s): %s", i, forms[i],
 			      pb_tf_strerror(st.code));
@@ -945,23 +945,23 @@ ZTEST(pb_tf_submsg, test_colon_is_optional_before_braces)
 ZTEST(pb_tf_submsg, test_submessage_requires_braces)
 {
 	fx_shapes_t m;
-	pb_tf_status_t st;
+	struct pb_tf_status st;
 
-	zassert_equal(pb_tf_parse(&fx_shapes_t_tf, &m, "sing_msg: 5", &st), PB_TF_ERR_SYNTAX);
+	zassert_equal(pb_tf_parse(&fx_shapes_t_tf, &m, "sing_msg: 5", &st), -PB_TF_ERR_SYNTAX);
 	zassert_str_equal(st.field, "sing_msg");
 }
 
 ZTEST(pb_tf_submsg, test_nested_two_levels)
 {
 	fx_deep1_t m;
-	pb_tf_status_t st;
-	pb_tf_err_t err = pb_tf_parse(&fx_deep1_t_tf, &m, "d2 { d3 { v: 5 } }", &st);
+	struct pb_tf_status st;
+	int err = pb_tf_parse(&fx_deep1_t_tf, &m, "d2 { d3 { v: 5 } }", &st);
 
 	if (CONFIG_NANOPB_TEXTFORMAT_MAX_DEPTH >= 2) {
 		zassert_equal(err, PB_TF_OK, "%s", pb_tf_strerror(st.code));
 		zassert_equal(m.d2.d3.v, 5);
 	} else {
-		zassert_equal(err, PB_TF_ERR_DEPTH, "got %s", pb_tf_strerror(err));
+		zassert_equal(err, -PB_TF_ERR_DEPTH, "got %s", pb_tf_strerror(err));
 	}
 }
 
@@ -969,16 +969,16 @@ ZTEST(pb_tf_submsg, test_nested_two_levels)
 ZTEST(pb_tf_submsg, test_depth_cap)
 {
 	fx_deep1_t m;
-	pb_tf_status_t st;
+	struct pb_tf_status st;
 
 	/* One level always fits: the Kconfig range starts at 1. */
-	pb_tf_err_t err = pb_tf_parse(&fx_deep1_t_tf, &m, "d2 { }", &st);
+	int err = pb_tf_parse(&fx_deep1_t_tf, &m, "d2 { }", &st);
 
 	zassert_equal(err, PB_TF_OK, "%s", pb_tf_strerror(st.code));
 
 	if (CONFIG_NANOPB_TEXTFORMAT_MAX_DEPTH == 1) {
 		zassert_equal(pb_tf_parse(&fx_deep1_t_tf, &m, "d2 { d3 { v: 1 } }", &st),
-			      PB_TF_ERR_DEPTH);
+			      -PB_TF_ERR_DEPTH);
 		zassert_str_equal(st.field, "d3", "the field that could not be entered");
 	}
 }
@@ -986,8 +986,8 @@ ZTEST(pb_tf_submsg, test_depth_cap)
 ZTEST(pb_tf_submsg, test_repeated_submessage_list)
 {
 	fx_shapes_t m;
-	pb_tf_status_t st;
-	pb_tf_err_t err =
+	struct pb_tf_status st;
+	int err =
 		pb_tf_parse(&fx_shapes_t_tf, &m, "rep_msg: [{a: 1}, {a: 2, b: -3}]", &st);
 
 	zassert_equal(err, PB_TF_OK, "%s", pb_tf_strerror(st.code));
@@ -1000,8 +1000,8 @@ ZTEST(pb_tf_submsg, test_repeated_submessage_list)
 ZTEST(pb_tf_submsg, test_repeated_submessage_by_repetition)
 {
 	fx_shapes_t m;
-	pb_tf_status_t st;
-	pb_tf_err_t err =
+	struct pb_tf_status st;
+	int err =
 		pb_tf_parse(&fx_shapes_t_tf, &m, "rep_msg { a: 1 } rep_msg { a: 2 }", &st);
 
 	zassert_equal(err, PB_TF_OK, "%s", pb_tf_strerror(st.code));
@@ -1034,8 +1034,8 @@ ZTEST(pb_tf_submsg, test_appended_element_is_cleared)
 ZTEST(pb_tf_submsg, test_singular_submessage_merges)
 {
 	fx_shapes_t m;
-	pb_tf_status_t st;
-	pb_tf_err_t err =
+	struct pb_tf_status st;
+	int err =
 		pb_tf_parse(&fx_shapes_t_tf, &m, "sing_msg { a: 1 } sing_msg { b: 2 }", &st);
 
 	zassert_equal(err, PB_TF_OK, "%s", pb_tf_strerror(st.code));
@@ -1046,8 +1046,8 @@ ZTEST(pb_tf_submsg, test_singular_submessage_merges)
 ZTEST(pb_tf_submsg, test_oneof_message_member)
 {
 	fx_shapes_t m;
-	pb_tf_status_t st;
-	pb_tf_err_t err = pb_tf_parse(&fx_shapes_t_tf, &m, "c_msg { a: 4 }", &st);
+	struct pb_tf_status st;
+	int err = pb_tf_parse(&fx_shapes_t_tf, &m, "c_msg { a: 4 }", &st);
 
 	zassert_equal(err, PB_TF_OK, "%s", pb_tf_strerror(st.code));
 	zassert_equal(m.which_choice, FX_SHAPES_C_MSG_TAG);
@@ -1061,8 +1061,8 @@ ZTEST(pb_tf_submsg, test_oneof_message_member)
 ZTEST(pb_tf_submsg, test_oneof_switch_clears_union)
 {
 	fx_shapes_t m;
-	pb_tf_status_t st;
-	pb_tf_err_t err;
+	struct pb_tf_status st;
+	int err;
 
 	/* Set every byte of the union, then switch to the message member. */
 	err = pb_tf_parse(&fx_shapes_t_tf, &m, "c_num: 4294967295", &st);
@@ -1084,8 +1084,8 @@ ZTEST(pb_tf_submsg, test_oneof_switch_clears_union)
 ZTEST(pb_tf_submsg, test_anonymous_oneof_message_member)
 {
 	fx_anon_t m;
-	pb_tf_status_t st;
-	pb_tf_err_t err = pb_tf_parse(&fx_anon_t_tf, &m, "keep: 1 p_msg { a: 2 }", &st);
+	struct pb_tf_status st;
+	int err = pb_tf_parse(&fx_anon_t_tf, &m, "keep: 1 p_msg { a: 2 }", &st);
 
 	zassert_equal(err, PB_TF_OK, "%s", pb_tf_strerror(st.code));
 	zassert_equal(m.keep, 1);
@@ -1096,17 +1096,17 @@ ZTEST(pb_tf_submsg, test_anonymous_oneof_message_member)
 ZTEST(pb_tf_submsg, test_errors_inside_a_submessage)
 {
 	fx_shapes_t m;
-	pb_tf_status_t st;
+	struct pb_tf_status st;
 	const char *txt = "sing_msg { nosuch: 1 }";
 
-	zassert_equal(pb_tf_parse(&fx_shapes_t_tf, &m, txt, &st), PB_TF_ERR_UNKNOWN_FIELD);
+	zassert_equal(pb_tf_parse(&fx_shapes_t_tf, &m, txt, &st), -PB_TF_ERR_UNKNOWN_FIELD);
 	zassert_equal(st.offset, off_of(txt, "nosuch"), "offset must be inside the submessage");
 
 	zassert_equal(pb_tf_parse(&fx_shapes_t_tf, &m, "sing_msg { a: 1", &st),
-		      PB_TF_ERR_SYNTAX, "unterminated submessage");
+		      -PB_TF_ERR_SYNTAX, "unterminated submessage");
 
 	zassert_equal(pb_tf_parse(&fx_shapes_t_tf, &m, "sing_msg { a: -1 }", &st),
-		      PB_TF_ERR_RANGE);
+		      -PB_TF_ERR_RANGE);
 	zassert_str_equal(st.field, "a", "the innermost field is the one at fault");
 }
 
@@ -1120,10 +1120,10 @@ ZTEST(pb_tf_submsg, test_errors_inside_a_submessage)
 ZTEST(pb_tf_submsg, test_proto2_required)
 {
 	fx_p2_t m;
-	pb_tf_status_t st;
+	struct pb_tf_status st;
 	pb_field_iter_t it;
-	const pb_tf_field_t *f = pb_tf_field_find(&fx_p2_t_tf, "req_num", 7);
-	pb_tf_err_t err;
+	const struct pb_tf_field *f = pb_tf_field_find(&fx_p2_t_tf, "req_num", 7);
+	int err;
 
 	zassert_not_null(f);
 	zassert_equal(PB_TF_HT(f->rules), PB_TF_HT_REQUIRED, "got 0x%02x", f->rules);
@@ -1157,9 +1157,9 @@ ZTEST(pb_tf_submsg, test_proto2_required_is_not_enforced)
 ZTEST(pb_tf_submsg, test_msg_w_cb_leaves_the_callback_alone)
 {
 	fx_p2_t m;
-	pb_tf_status_t st;
-	const pb_tf_field_t *f = pb_tf_field_find(&fx_p2_t_tf, "cb_sub", 6);
-	pb_tf_err_t err;
+	struct pb_tf_status st;
+	const struct pb_tf_field *f = pb_tf_field_find(&fx_p2_t_tf, "cb_sub", 6);
+	int err;
 
 	zassert_not_null(f);
 	zassert_equal(f->vtype, PB_TF_VT_MSG_W_CB, "got vtype %u", f->vtype);
@@ -1183,7 +1183,7 @@ ZTEST(pb_tf_submsg, test_msg_w_cb_leaves_the_callback_alone)
 ZTEST(pb_tf_submsg, test_extension_row_is_not_addressable)
 {
 	fx_p2_t m;
-	pb_tf_status_t st;
+	struct pb_tf_status st;
 	bool seen = false;
 
 	/* The row exists in the table... */
@@ -1198,27 +1198,27 @@ ZTEST(pb_tf_submsg, test_extension_row_is_not_addressable)
 	/* ...but the name scan skips it. */
 	zassert_is_null(pb_tf_field_find(&fx_p2_t_tf, "extensions", 10));
 	zassert_equal(pb_tf_parse(&fx_p2_t_tf, &m, "extensions: 1", &st),
-		      PB_TF_ERR_UNKNOWN_FIELD);
+		      -PB_TF_ERR_UNKNOWN_FIELD);
 }
 
 /* POINTER and CALLBACK allocation: a runtime error, not a build break. */
 ZTEST(pb_tf_submsg, test_non_static_allocation_is_unsupported)
 {
 	fx_alloc_t m;
-	pb_tf_status_t st;
+	struct pb_tf_status st;
 
 	/* The STATIC field in the same message still works. */
-	pb_tf_err_t err = pb_tf_parse(&fx_alloc_t_tf, &m, "ok_num: 5", &st);
+	int err = pb_tf_parse(&fx_alloc_t_tf, &m, "ok_num: 5", &st);
 
 	zassert_equal(err, PB_TF_OK, "%s", pb_tf_strerror(st.code));
 	zassert_equal(m.ok_num, 5);
 
 	zassert_equal(pb_tf_parse(&fx_alloc_t_tf, &m, "ptr_str: \"x\"", &st),
-		      PB_TF_ERR_UNSUPPORTED);
+		      -PB_TF_ERR_UNSUPPORTED);
 	zassert_str_equal(st.field, "ptr_str");
 
 	zassert_equal(pb_tf_parse(&fx_alloc_t_tf, &m, "cb_str: \"x\"", &st),
-		      PB_TF_ERR_UNSUPPORTED);
+		      -PB_TF_ERR_UNSUPPORTED);
 	zassert_str_equal(st.field, "cb_str");
 }
 
@@ -1233,8 +1233,8 @@ ZTEST_SUITE(pb_tf_text, NULL, NULL, NULL, NULL, NULL);
 ZTEST(pb_tf_text, test_plain_string)
 {
 	fx_scalars_t m;
-	pb_tf_status_t st;
-	pb_tf_err_t err = pb_tf_parse(&fx_scalars_t_tf, &m, "f_string: \"hello\"", &st);
+	struct pb_tf_status st;
+	int err = pb_tf_parse(&fx_scalars_t_tf, &m, "f_string: \"hello\"", &st);
 
 	zassert_equal(err, PB_TF_OK, "%s", pb_tf_strerror(st.code));
 	zassert_str_equal(m.f_string, "hello");
@@ -1263,8 +1263,8 @@ ZTEST(pb_tf_text, test_both_quote_styles)
 ZTEST(pb_tf_text, test_simple_escapes)
 {
 	fx_scalars_t m;
-	pb_tf_status_t st;
-	pb_tf_err_t err = pb_tf_parse(&fx_scalars_t_tf, &m,
+	struct pb_tf_status st;
+	int err = pb_tf_parse(&fx_scalars_t_tf, &m,
 				      "f_string: \"\\a\\b\\f\\n\\r\\t\\v\\?\\\\\\'\\\"\"", &st);
 
 	zassert_equal(err, PB_TF_OK, "%s", pb_tf_strerror(st.code));
@@ -1275,8 +1275,8 @@ ZTEST(pb_tf_text, test_simple_escapes)
 ZTEST(pb_tf_text, test_hex_escapes)
 {
 	fx_scalars_t m;
-	pb_tf_status_t st;
-	pb_tf_err_t err;
+	struct pb_tf_status st;
+	int err;
 
 	err = pb_tf_parse(&fx_scalars_t_tf, &m, "f_bytes: \"\\x41\\x7\\xfF\"", &st);
 	zassert_equal(err, PB_TF_OK, "%s", pb_tf_strerror(st.code));
@@ -1287,14 +1287,14 @@ ZTEST(pb_tf_text, test_hex_escapes)
 
 	/* \x with no hex digit at all. */
 	zassert_equal(pb_tf_parse(&fx_scalars_t_tf, &m, "f_bytes: \"\\xz\"", NULL),
-		      PB_TF_ERR_SYNTAX);
+		      -PB_TF_ERR_SYNTAX);
 }
 
 ZTEST(pb_tf_text, test_octal_escapes)
 {
 	fx_scalars_t m;
-	pb_tf_status_t st;
-	pb_tf_err_t err = pb_tf_parse(&fx_scalars_t_tf, &m, "f_bytes: \"\\0\\7\\77\\377\"", &st);
+	struct pb_tf_status st;
+	int err = pb_tf_parse(&fx_scalars_t_tf, &m, "f_bytes: \"\\0\\7\\77\\377\"", &st);
 
 	zassert_equal(err, PB_TF_OK, "%s", pb_tf_strerror(st.code));
 	zassert_equal(m.f_bytes.size, 4, "got %u", m.f_bytes.size);
@@ -1305,15 +1305,15 @@ ZTEST(pb_tf_text, test_octal_escapes)
 
 	/* Three octal digits can exceed a byte. */
 	zassert_equal(pb_tf_parse(&fx_scalars_t_tf, &m, "f_bytes: \"\\400\"", NULL),
-		      PB_TF_ERR_RANGE);
+		      -PB_TF_ERR_RANGE);
 }
 
 /* An embedded NUL is fine in bytes: the length is carried separately. */
 ZTEST(pb_tf_text, test_bytes_may_contain_nul)
 {
 	fx_scalars_t m;
-	pb_tf_status_t st;
-	pb_tf_err_t err = pb_tf_parse(&fx_scalars_t_tf, &m, "f_bytes: \"a\\x00b\"", &st);
+	struct pb_tf_status st;
+	int err = pb_tf_parse(&fx_scalars_t_tf, &m, "f_bytes: \"a\\x00b\"", &st);
 
 	zassert_equal(err, PB_TF_OK, "%s", pb_tf_strerror(st.code));
 	zassert_equal(m.f_bytes.size, 3, "got %u", m.f_bytes.size);
@@ -1339,8 +1339,8 @@ ZTEST(pb_tf_text, test_unicode_escapes_become_utf8)
 
 	ARRAY_FOR_EACH(cases, i) {
 		fx_scalars_t m;
-		pb_tf_status_t st;
-		pb_tf_err_t err = pb_tf_parse(&fx_scalars_t_tf, &m, cases[i].text, &st);
+		struct pb_tf_status st;
+		int err = pb_tf_parse(&fx_scalars_t_tf, &m, cases[i].text, &st);
 
 		zassert_equal(err, PB_TF_OK, "'%s': %s", cases[i].text, pb_tf_strerror(st.code));
 		zassert_equal(m.f_bytes.size, cases[i].len, "'%s' gave %u bytes", cases[i].text,
@@ -1370,7 +1370,7 @@ ZTEST(pb_tf_text, test_lone_surrogate_is_rejected)
 		fx_scalars_t m;
 
 		zassert_equal(pb_tf_parse(&fx_scalars_t_tf, &m, bad[i], NULL),
-			      PB_TF_ERR_SYNTAX, "'%s' must be refused", bad[i]);
+			      -PB_TF_ERR_SYNTAX, "'%s' must be refused", bad[i]);
 	}
 
 	/* The code points either side of the surrogate block are fine. */
@@ -1386,22 +1386,22 @@ ZTEST(pb_tf_text, test_malformed_escapes_and_literals)
 {
 	static const struct {
 		const char *text;
-		pb_tf_err_t want;
+		int want;
 	} cases[] = {
 		/* \U and surrogate pairs are out of scope. */
-		{"f_string: \"\\U0001F600\"", PB_TF_ERR_SYNTAX},
-		{"f_string: \"\\q\"", PB_TF_ERR_SYNTAX},
-		{"f_string: \"\\u12\"", PB_TF_ERR_SYNTAX},
-		{"f_string: \"\\u\"", PB_TF_ERR_SYNTAX},
-		{"f_string: \"unterminated", PB_TF_ERR_SYNTAX},
-		{"f_string: 'mismatched\"", PB_TF_ERR_SYNTAX},
-		{"f_string: \"trailing\\", PB_TF_ERR_SYNTAX},
+		{"f_string: \"\\U0001F600\"", -PB_TF_ERR_SYNTAX},
+		{"f_string: \"\\q\"", -PB_TF_ERR_SYNTAX},
+		{"f_string: \"\\u12\"", -PB_TF_ERR_SYNTAX},
+		{"f_string: \"\\u\"", -PB_TF_ERR_SYNTAX},
+		{"f_string: \"unterminated", -PB_TF_ERR_SYNTAX},
+		{"f_string: 'mismatched\"", -PB_TF_ERR_SYNTAX},
+		{"f_string: \"trailing\\", -PB_TF_ERR_SYNTAX},
 		/* A raw newline is not valid inside a literal. */
-		{"f_string: \"line\nbreak\"", PB_TF_ERR_SYNTAX},
-		{"f_string: \"tab\there\"", PB_TF_ERR_SYNTAX},
+		{"f_string: \"line\nbreak\"", -PB_TF_ERR_SYNTAX},
+		{"f_string: \"tab\there\"", -PB_TF_ERR_SYNTAX},
 		/* A bare word where a literal belongs. */
-		{"f_string: hello", PB_TF_ERR_TYPE},
-		{"f_string: 5", PB_TF_ERR_TYPE},
+		{"f_string: hello", -PB_TF_ERR_TYPE},
+		{"f_string: 5", -PB_TF_ERR_TYPE},
 	};
 
 	ARRAY_FOR_EACH(cases, i) {
@@ -1418,16 +1418,16 @@ ZTEST(pb_tf_text, test_adjacent_literals_rejected)
 	fx_scalars_t m;
 
 	zassert_equal(pb_tf_parse(&fx_scalars_t_tf, &m, "f_string: \"a\" \"b\"", NULL),
-		      PB_TF_ERR_SYNTAX);
+		      -PB_TF_ERR_SYNTAX);
 }
 
 /* nanopb's bound is size + 1 <= data_size, so data_size - 1 characters fit. */
 ZTEST(pb_tf_text, test_string_capacity)
 {
 	fx_scalars_t m;
-	pb_tf_status_t st;
+	struct pb_tf_status st;
 	const size_t cap = sizeof(m.f_string) - 1U;
-	pb_tf_err_t err;
+	int err;
 
 	zassert_equal(cap, 15, "the fixture declares max_size:16");
 
@@ -1437,7 +1437,7 @@ ZTEST(pb_tf_text, test_string_capacity)
 	zassert_equal(strlen(m.f_string), cap);
 
 	zassert_equal(pb_tf_parse(&fx_scalars_t_tf, &m, "f_string: \"1234567890123456\"", &st),
-		      PB_TF_ERR_NO_SPACE, "one character past the array must not fit");
+		      -PB_TF_ERR_NO_SPACE, "one character past the array must not fit");
 	zassert_str_equal(st.field, "f_string");
 }
 
@@ -1448,9 +1448,9 @@ ZTEST(pb_tf_text, test_string_capacity)
 ZTEST(pb_tf_text, test_bytes_capacity)
 {
 	fx_scalars_t m;
-	pb_tf_status_t st;
+	struct pb_tf_status st;
 	const size_t cap = sizeof(m.f_bytes) - offsetof(pb_bytes_array_t, bytes);
-	pb_tf_err_t err;
+	int err;
 
 	zassert_true(cap >= 8, "the fixture declares max_size:8, got %zu", cap);
 
@@ -1460,7 +1460,7 @@ ZTEST(pb_tf_text, test_bytes_capacity)
 
 	if (cap == 8U) {
 		zassert_equal(pb_tf_parse(&fx_scalars_t_tf, &m, "f_bytes: \"123456789\"", &st),
-			      PB_TF_ERR_NO_SPACE);
+			      -PB_TF_ERR_NO_SPACE);
 		zassert_str_equal(st.field, "f_bytes");
 	}
 }
@@ -1472,8 +1472,8 @@ ZTEST(pb_tf_text, test_bytes_capacity)
 ZTEST(pb_tf_text, test_fixed_length_bytes)
 {
 	fx_scalars_t m;
-	pb_tf_status_t st;
-	pb_tf_err_t err;
+	struct pb_tf_status st;
+	int err;
 
 	zassert_equal(sizeof(m.f_fixed_bytes), 4, "the fixture declares max_size:4");
 
@@ -1489,19 +1489,19 @@ ZTEST(pb_tf_text, test_fixed_length_bytes)
 
 	/* Too short is a wrong-shaped literal, not an overflow. */
 	zassert_equal(pb_tf_parse(&fx_scalars_t_tf, &m, "f_fixed_bytes: \"abc\"", &st),
-		      PB_TF_ERR_TYPE);
+		      -PB_TF_ERR_TYPE);
 	zassert_str_equal(st.field, "f_fixed_bytes");
 
 	/* Too long overflows. */
 	zassert_equal(pb_tf_parse(&fx_scalars_t_tf, &m, "f_fixed_bytes: \"abcde\"", NULL),
-		      PB_TF_ERR_NO_SPACE);
+		      -PB_TF_ERR_NO_SPACE);
 }
 
 ZTEST(pb_tf_text, test_repeated_string)
 {
 	fx_shapes_t m;
-	pb_tf_status_t st;
-	pb_tf_err_t err = pb_tf_parse(&fx_shapes_t_tf, &m, "rep_string: [\"ab\", \"cd\"]", &st);
+	struct pb_tf_status st;
+	int err = pb_tf_parse(&fx_shapes_t_tf, &m, "rep_string: [\"ab\", \"cd\"]", &st);
 
 	zassert_equal(err, PB_TF_OK, "%s", pb_tf_strerror(st.code));
 	zassert_equal(m.rep_string_count, 2, "got %u", m.rep_string_count);
@@ -1510,18 +1510,18 @@ ZTEST(pb_tf_text, test_repeated_string)
 
 	/* max_count is 2. */
 	zassert_equal(pb_tf_parse(&fx_shapes_t_tf, &m, "rep_string: [\"a\",\"b\",\"c\"]", NULL),
-		      PB_TF_ERR_TOO_MANY);
+		      -PB_TF_ERR_TOO_MANY);
 
 	/* Each element is bounded by its own element size, not the whole array. */
 	zassert_equal(pb_tf_parse(&fx_shapes_t_tf, &m, "rep_string: [\"12345678\"]", &st),
-		      PB_TF_ERR_NO_SPACE, "element capacity is sizeof(rep_string[0]) - 1");
+		      -PB_TF_ERR_NO_SPACE, "element capacity is sizeof(rep_string[0]) - 1");
 }
 
 ZTEST(pb_tf_text, test_oneof_string_member)
 {
 	fx_shapes_t m;
-	pb_tf_status_t st;
-	pb_tf_err_t err = pb_tf_parse(&fx_shapes_t_tf, &m, "c_str: \"pick\"", &st);
+	struct pb_tf_status st;
+	int err = pb_tf_parse(&fx_shapes_t_tf, &m, "c_str: \"pick\"", &st);
 
 	zassert_equal(err, PB_TF_OK, "%s", pb_tf_strerror(st.code));
 	zassert_equal(m.which_choice, FX_SHAPES_C_STR_TAG);
@@ -1539,8 +1539,8 @@ ZTEST(pb_tf_text, test_oneof_string_member)
 ZTEST(pb_tf_text, test_string_in_submessage)
 {
 	fx_shapes_t m;
-	pb_tf_status_t st;
-	pb_tf_err_t err =
+	struct pb_tf_status st;
+	int err =
 		pb_tf_parse(&fx_shapes_t_tf, &m, "rep_string: [\"x\"] sing_msg { a: 1 }", &st);
 
 	zassert_equal(err, PB_TF_OK, "%s", pb_tf_strerror(st.code));
@@ -1568,14 +1568,19 @@ ZTEST_SUITE(pb_tf_print, NULL, NULL, NULL, NULL, NULL);
 /* Print into a local array and yield it. Style comes from Kconfig. */
 #define PRINT_INTO(dst, tf, msg)                                                                   \
 	({                                                                                         \
-		pb_tf_err_t _e = pb_tf_print_buf((tf), (msg), (dst), sizeof(dst));                  \
+		int _e = pb_tf_print_buf_multiline((tf), (msg), (dst), sizeof(dst));                  \
 		zassert_equal(_e, PB_TF_OK, "print: %s", pb_tf_strerror(_e));                      \
 		(dst);                                                                             \
 	})
 
-#define STYLE_COMPACT  IS_ENABLED(CONFIG_NANOPB_TEXTFORMAT_PRINT_COMPACT)
-#define STYLE_BRACES   IS_ENABLED(CONFIG_NANOPB_TEXTFORMAT_PRINT_BRACES)
-#define STYLE_SKIP     IS_ENABLED(CONFIG_NANOPB_TEXTFORMAT_PRINT_SKIP_DEFAULTS)
+#define STYLE_SKIP IS_ENABLED(CONFIG_NANOPB_TEXTFORMAT_PRINT_SKIP_DEFAULTS)
+
+/*
+ * The line style and braces are named per call now, so a single build asserts
+ * every combination exactly -- which is stronger than the old arrangement,
+ * where each style needed its own twister scenario and only one was live per
+ * build.
+ */
 
 /*
  * fx_scalars carries a field of every ltype, so printing it needs a build that
@@ -1592,25 +1597,39 @@ ZTEST_SUITE(pb_tf_print, NULL, NULL, NULL, NULL, NULL);
  * that would catch a stray space or a missing newline, so it spells all four
  * combinations out rather than deriving them.
  */
-ZTEST(pb_tf_print, test_style_matches_configuration)
+/*
+ * The exact bytes of all four combinations, in one build. This is the test that
+ * would catch a stray space or a missing newline.
+ */
+ZTEST(pb_tf_print, test_every_style_exactly)
 {
 	fx_shapes_t m;
 	char out[192];
-	const char *want;
 
 	zassert_equal(pb_tf_parse(&fx_shapes_t_tf, &m, "plain_scalar: 1 opt_scalar: 2", NULL),
 		      PB_TF_OK);
 
-	if (STYLE_COMPACT) {
-		want = STYLE_BRACES ? "{plain_scalar: 1, opt_scalar: 2}"
-				    : "plain_scalar: 1, opt_scalar: 2";
-	} else if (STYLE_BRACES) {
-		want = "{\n  plain_scalar: 1\n  opt_scalar: 2\n}\n";
-	} else {
-		want = "plain_scalar: 1\nopt_scalar: 2\n";
+	if (STYLE_SKIP) {
+		/* opt_scalar was set, plain_scalar is a default zero. */
+		zassert_equal(pb_tf_print_buf_compact(&fx_shapes_t_tf, &m, out, sizeof(out)),
+			      PB_TF_OK);
+		zassert_str_equal(out, "opt_scalar: 2");
+		return;
 	}
 
-	zassert_str_equal(PRINT_INTO(out, &fx_shapes_t_tf, &m), want);
+	zassert_equal(pb_tf_print_buf_compact(&fx_shapes_t_tf, &m, out, sizeof(out)), PB_TF_OK);
+	zassert_str_equal(out, "plain_scalar: 1, opt_scalar: 2");
+
+	zassert_equal(pb_tf_print_buf_multiline(&fx_shapes_t_tf, &m, out, sizeof(out)), PB_TF_OK);
+	zassert_str_equal(out, "plain_scalar: 1\nopt_scalar: 2\n");
+
+	zassert_equal(pb_tf_print_buf_compact_braces(&fx_shapes_t_tf, &m, out, sizeof(out)),
+		      PB_TF_OK);
+	zassert_str_equal(out, "{plain_scalar: 1, opt_scalar: 2}");
+
+	zassert_equal(pb_tf_print_buf_multiline_braces(&fx_shapes_t_tf, &m, out, sizeof(out)),
+		      PB_TF_OK);
+	zassert_str_equal(out, "{\n  plain_scalar: 1\n  opt_scalar: 2\n}\n");
 }
 
 /* A submessage nests; multi-line indents it, compact keeps it tight. */
@@ -1618,21 +1637,20 @@ ZTEST(pb_tf_print, test_submessage_style)
 {
 	fx_shapes_t m;
 	char out[192];
-	const char *s;
 
 	zassert_equal(pb_tf_parse(&fx_shapes_t_tf, &m, "sing_msg { a: 1, b: -2 }", NULL),
 		      PB_TF_OK);
-	s = PRINT_INTO(out, &fx_shapes_t_tf, &m);
 
-	if (STYLE_COMPACT) {
-		zassert_not_null(strstr(s, "sing_msg {a: 1, b: -2}"), "got %s", s);
-	} else if (STYLE_BRACES) {
-		/* Braces indent the whole body one level, so everything shifts. */
-		zassert_not_null(strstr(s, "  sing_msg {\n    a: 1\n    b: -2\n  }\n"), "got %s",
-				 s);
-	} else {
-		zassert_not_null(strstr(s, "sing_msg {\n  a: 1\n  b: -2\n}\n"), "got %s", s);
-	}
+	zassert_equal(pb_tf_print_buf_compact(&fx_shapes_t_tf, &m, out, sizeof(out)), PB_TF_OK);
+	zassert_not_null(strstr(out, "sing_msg {a: 1, b: -2}"), "got %s", out);
+
+	zassert_equal(pb_tf_print_buf_multiline(&fx_shapes_t_tf, &m, out, sizeof(out)), PB_TF_OK);
+	zassert_not_null(strstr(out, "sing_msg {\n  a: 1\n  b: -2\n}\n"), "got %s", out);
+
+	/* Braces indent the whole body one level, so everything shifts. */
+	zassert_equal(pb_tf_print_buf_multiline_braces(&fx_shapes_t_tf, &m, out, sizeof(out)),
+		      PB_TF_OK);
+	zassert_not_null(strstr(out, "  sing_msg {\n    a: 1\n    b: -2\n  }\n"), "got %s", out);
 }
 
 ZTEST(pb_tf_print, test_two_levels_indent)
@@ -1640,19 +1658,19 @@ ZTEST(pb_tf_print, test_two_levels_indent)
 	fx_deep1_t m;
 	char out[192];
 
-	if (STYLE_COMPACT || (CONFIG_NANOPB_TEXTFORMAT_MAX_DEPTH < 2)) {
+	if (CONFIG_NANOPB_TEXTFORMAT_MAX_DEPTH < 2) {
 		ztest_test_skip();
 	}
 
 	zassert_equal(pb_tf_parse(&fx_deep1_t_tf, &m, "d2 { d3 { v: 9 } }", NULL), PB_TF_OK);
 
-	if (STYLE_BRACES) {
-		zassert_not_null(strstr(PRINT_INTO(out, &fx_deep1_t_tf, &m),
-					"  d2 {\n    d3 {\n      v: 9\n    }\n  }\n"));
-	} else {
-		zassert_not_null(strstr(PRINT_INTO(out, &fx_deep1_t_tf, &m),
-					"d2 {\n  d3 {\n    v: 9\n  }\n}\n"));
-	}
+	zassert_equal(pb_tf_print_buf_multiline(&fx_deep1_t_tf, &m, out, sizeof(out)), PB_TF_OK);
+	zassert_not_null(strstr(out, "d2 {\n  d3 {\n    v: 9\n  }\n}\n"), "got %s", out);
+
+	zassert_equal(pb_tf_print_buf_multiline_braces(&fx_deep1_t_tf, &m, out, sizeof(out)),
+		      PB_TF_OK);
+	zassert_not_null(strstr(out, "  d2 {\n    d3 {\n      v: 9\n    }\n  }\n"), "got %s",
+			 out);
 }
 
 /* An absent optional prints nothing; a present zero prints even under SKIP. */
@@ -1773,13 +1791,13 @@ ZTEST(pb_tf_print, test_out_buf_overflow_is_reported)
 {
 	fx_shapes_t m;
 	char tiny[8];
-	pb_tf_buf_t b = {.buf = tiny, .size = sizeof(tiny)};
+	struct pb_tf_buf b = {.buf = tiny, .size = sizeof(tiny)};
 
 	zassert_equal(pb_tf_parse(&fx_shapes_t_tf, &m, "plain_scalar: 123456789", NULL),
 		      PB_TF_OK);
 
 	/* Truncation is reported on the sink, not as a print error. */
-	zassert_equal(pb_tf_print(&fx_shapes_t_tf, &m, pb_tf_out_buf, &b), PB_TF_OK);
+	zassert_equal(pb_tf_print_multiline(&fx_shapes_t_tf, &m, pb_tf_out_buf, &b), PB_TF_OK);
 	zassert_true(b.overflow);
 	zassert_true(strlen(tiny) < sizeof(tiny));
 }
@@ -1790,17 +1808,17 @@ ZTEST(pb_tf_print, test_null_arguments)
 	 * reject the arguments and never read it. */
 	fx_shapes_t m = {0};
 	char out[32];
-	pb_tf_buf_t b = {.buf = out, .size = sizeof(out)};
+	struct pb_tf_buf b = {.buf = out, .size = sizeof(out)};
 
-	zassert_equal(pb_tf_print(NULL, &m, pb_tf_out_buf, &b), PB_TF_ERR_INTERNAL);
-	zassert_equal(pb_tf_print(&fx_shapes_t_tf, NULL, pb_tf_out_buf, &b), PB_TF_ERR_INTERNAL);
-	zassert_equal(pb_tf_print(&fx_shapes_t_tf, &m, NULL, &b), PB_TF_ERR_INTERNAL);
+	zassert_equal(pb_tf_print_multiline(NULL, &m, pb_tf_out_buf, &b), -PB_TF_ERR_INTERNAL);
+	zassert_equal(pb_tf_print_multiline(&fx_shapes_t_tf, NULL, pb_tf_out_buf, &b), -PB_TF_ERR_INTERNAL);
+	zassert_equal(pb_tf_print_multiline(&fx_shapes_t_tf, &m, NULL, &b), -PB_TF_ERR_INTERNAL);
 }
 
 /*
  * An empty message prints nothing at all, braces aside -- and that is exactly
  * the case pb_tf_out_buf() alone cannot terminate, since it terminates as it
- * writes and here it is never called. pb_tf_print_buf() exists for this.
+ * writes and here it is never called. pb_tf_print_buf_multiline() exists for this.
  */
 ZTEST(pb_tf_print, test_empty_message)
 {
@@ -1810,13 +1828,18 @@ ZTEST(pb_tf_print, test_empty_message)
 	zassert_equal(pb_tf_parse(&fx_empty_t_tf, &m, "", NULL), PB_TF_OK);
 
 	(void)memset(out, 'X', sizeof(out));
-	zassert_equal(pb_tf_print_buf(&fx_empty_t_tf, &m, out, sizeof(out)), PB_TF_OK);
+	zassert_equal(pb_tf_print_buf_multiline(&fx_empty_t_tf, &m, out, sizeof(out)), PB_TF_OK);
+	zassert_str_equal(out, "", "a message that prints nothing must still terminate");
 
-	if (STYLE_BRACES) {
-		zassert_str_equal(out, STYLE_COMPACT ? "{}" : "{\n}\n");
-	} else {
-		zassert_str_equal(out, "", "a message that prints nothing must still terminate");
-	}
+	(void)memset(out, 'X', sizeof(out));
+	zassert_equal(pb_tf_print_buf_compact_braces(&fx_empty_t_tf, &m, out, sizeof(out)),
+		      PB_TF_OK);
+	zassert_str_equal(out, "{}");
+
+	(void)memset(out, 'X', sizeof(out));
+	zassert_equal(pb_tf_print_buf_multiline_braces(&fx_empty_t_tf, &m, out, sizeof(out)),
+		      PB_TF_OK);
+	zassert_str_equal(out, "{\n}\n");
 }
 
 /* The same trap via SKIP_DEFAULTS: every field skipped, so nothing is written. */
@@ -1825,14 +1848,14 @@ ZTEST(pb_tf_print, test_all_defaults_skipped_still_terminates)
 	fx_shapes_t m;
 	char out[64];
 
-	if (!STYLE_SKIP || STYLE_BRACES) {
+	if (!STYLE_SKIP) {
 		ztest_test_skip();
 	}
 
 	zassert_equal(pb_tf_parse(&fx_shapes_t_tf, &m, "", NULL), PB_TF_OK);
 
 	(void)memset(out, 'X', sizeof(out));
-	zassert_equal(pb_tf_print_buf(&fx_shapes_t_tf, &m, out, sizeof(out)), PB_TF_OK);
+	zassert_equal(pb_tf_print_buf_multiline(&fx_shapes_t_tf, &m, out, sizeof(out)), PB_TF_OK);
 	zassert_str_equal(out, "");
 }
 
@@ -1845,13 +1868,13 @@ ZTEST(pb_tf_print, test_print_buf_reports_truncation)
 	zassert_equal(pb_tf_parse(&fx_shapes_t_tf, &m, "plain_scalar: 123456789", NULL),
 		      PB_TF_OK);
 
-	zassert_equal(pb_tf_print_buf(&fx_shapes_t_tf, &m, tiny, sizeof(tiny)),
-		      PB_TF_ERR_NO_SPACE);
+	zassert_equal(pb_tf_print_buf_multiline(&fx_shapes_t_tf, &m, tiny, sizeof(tiny)),
+		      -PB_TF_ERR_NO_SPACE);
 	zassert_true(strlen(tiny) < sizeof(tiny), "must stay terminated when truncated");
 
 	/* Degenerate sizes are rejected rather than writing anything. */
-	zassert_equal(pb_tf_print_buf(&fx_shapes_t_tf, &m, tiny, 0U), PB_TF_ERR_INTERNAL);
-	zassert_equal(pb_tf_print_buf(&fx_shapes_t_tf, &m, NULL, 8U), PB_TF_ERR_INTERNAL);
+	zassert_equal(pb_tf_print_buf_multiline(&fx_shapes_t_tf, &m, tiny, 0U), -PB_TF_ERR_INTERNAL);
+	zassert_equal(pb_tf_print_buf_multiline(&fx_shapes_t_tf, &m, NULL, 8U), -PB_TF_ERR_INTERNAL);
 }
 
 /*
@@ -1871,18 +1894,18 @@ ZTEST(pb_tf_print, test_print_buf_reports_truncation)
 ZTEST_SUITE(pb_tf_roundtrip, NULL, NULL, NULL, NULL, NULL);
 
 /** parse(text) -> print -> parse -> assert both structs and both texts agree. */
-static void roundtrip(const pb_tf_msg_t *tf, void *a, void *b, size_t size, const char *text)
+static void roundtrip(const struct pb_tf_msg *tf, void *a, void *b, size_t size, const char *text)
 {
 	char first[1024];
 	char second[1024];
-	pb_tf_status_t st;
-	pb_tf_err_t err;
+	struct pb_tf_status st;
+	int err;
 
 	err = pb_tf_parse(tf, a, text, &st);
 	zassert_equal(err, PB_TF_OK, "parse '%s': %s at %u", text, pb_tf_strerror(st.code),
 		      st.offset);
 
-	err = pb_tf_print_buf(tf, a, first, sizeof(first));
+	err = pb_tf_print_buf_multiline(tf, a, first, sizeof(first));
 	zassert_equal(err, PB_TF_OK, "print: %s", pb_tf_strerror(err));
 
 	err = pb_tf_parse(tf, b, first, &st);
@@ -1892,7 +1915,7 @@ static void roundtrip(const pb_tf_msg_t *tf, void *a, void *b, size_t size, cons
 	zassert_mem_equal(a, b, size, "structs differ after round-trip of '%s' via '%s'", text,
 			  first);
 
-	err = pb_tf_print_buf(tf, b, second, sizeof(second));
+	err = pb_tf_print_buf_multiline(tf, b, second, sizeof(second));
 	zassert_equal(err, PB_TF_OK, "reprint: %s", pb_tf_strerror(err));
 	zassert_str_equal(first, second, "printing is not idempotent");
 }
@@ -1999,8 +2022,8 @@ ZTEST(pb_tf_float, test_literal_forms)
 
 	ARRAY_FOR_EACH(cases, i) {
 		fx_scalars_t m;
-		pb_tf_status_t st;
-		pb_tf_err_t err = pb_tf_parse(&fx_scalars_t_tf, &m, cases[i].text, &st);
+		struct pb_tf_status st;
+		int err = pb_tf_parse(&fx_scalars_t_tf, &m, cases[i].text, &st);
 
 		zassert_equal(err, PB_TF_OK, "'%s': %s", cases[i].text, pb_tf_strerror(st.code));
 		zassert_equal(m.f_float, cases[i].want, "'%s'", cases[i].text);
@@ -2010,8 +2033,8 @@ ZTEST(pb_tf_float, test_literal_forms)
 ZTEST(pb_tf_float, test_double_keeps_full_precision)
 {
 	fx_scalars_t m;
-	pb_tf_status_t st;
-	pb_tf_err_t err = pb_tf_parse(&fx_scalars_t_tf, &m,
+	struct pb_tf_status st;
+	int err = pb_tf_parse(&fx_scalars_t_tf, &m,
 				      "f_double: 0.1234567890123456789", &st);
 
 	zassert_equal(err, PB_TF_OK, "%s", pb_tf_strerror(st.code));
@@ -2060,16 +2083,16 @@ ZTEST(pb_tf_float, test_strtod_is_not_trusted)
 {
 	static const struct {
 		const char *text;
-		pb_tf_err_t want;
+		int want;
 	} cases[] = {
 		/* Hex float: strtod() would take it, text format has no such literal. */
-		{"f_float: 0x1p3", PB_TF_ERR_TYPE},
-		{"f_float: +1.0", PB_TF_ERR_SYNTAX},
-		{"f_float: nan(x)", PB_TF_ERR_SYNTAX},
-		{"f_float: .", PB_TF_ERR_SYNTAX},
-		{"f_float: -", PB_TF_ERR_SYNTAX},
-		{"f_float: hello", PB_TF_ERR_TYPE},
-		{"f_float: \"1.0\"", PB_TF_ERR_SYNTAX},
+		{"f_float: 0x1p3", -PB_TF_ERR_TYPE},
+		{"f_float: +1.0", -PB_TF_ERR_SYNTAX},
+		{"f_float: nan(x)", -PB_TF_ERR_SYNTAX},
+		{"f_float: .", -PB_TF_ERR_SYNTAX},
+		{"f_float: -", -PB_TF_ERR_SYNTAX},
+		{"f_float: hello", -PB_TF_ERR_TYPE},
+		{"f_float: \"1.0\"", -PB_TF_ERR_SYNTAX},
 	};
 
 	ARRAY_FOR_EACH(cases, i) {
@@ -2084,16 +2107,16 @@ ZTEST(pb_tf_float, test_strtod_is_not_trusted)
 ZTEST(pb_tf_float, test_overflow_is_refused)
 {
 	fx_scalars_t m;
-	pb_tf_status_t st;
+	struct pb_tf_status st;
 
 	/* Exceeds FLT_MAX but is a perfectly good double. */
 	zassert_equal(pb_tf_parse(&fx_scalars_t_tf, &m, "f_float: 1e39", &st),
-		      PB_TF_ERR_RANGE, "narrowing to float must not yield inf");
+		      -PB_TF_ERR_RANGE, "narrowing to float must not yield inf");
 	zassert_str_equal(st.field, "f_float");
 
 	/* Overflows the double itself: strtod returns inf with ERANGE. */
 	zassert_equal(pb_tf_parse(&fx_scalars_t_tf, &m, "f_double: 1e309", &st),
-		      PB_TF_ERR_RANGE);
+		      -PB_TF_ERR_RANGE);
 	zassert_str_equal(st.field, "f_double");
 
 	/* At the boundary it still fits. */
@@ -2119,14 +2142,14 @@ ZTEST(pb_tf_float, test_print_precision_round_trips)
 		fx_scalars_t a;
 		fx_scalars_t b;
 		char text[1024];
-		pb_tf_status_t st;
-		pb_tf_err_t err;
+		struct pb_tf_status st;
+		int err;
 
 		err = pb_tf_parse(&fx_scalars_t_tf, &a, inputs[i], &st);
 		zassert_equal(err, PB_TF_OK, "'%s': %s", inputs[i], pb_tf_strerror(st.code));
 
-		err = pb_tf_print_buf(&fx_scalars_t_tf, &a, text, sizeof(text));
-		if (err == PB_TF_ERR_UNSUPPORTED) {
+		err = pb_tf_print_buf_multiline(&fx_scalars_t_tf, &a, text, sizeof(text));
+		if (err == -PB_TF_ERR_UNSUPPORTED) {
 			/* 64-bit fields under PB_WITHOUT_64BIT; not this test's subject. */
 			ztest_test_skip();
 		}
@@ -2153,7 +2176,7 @@ ZTEST(pb_tf_float, test_print_precision_round_trips)
  *
  * At DBL_MAX the 16-digit form rounds *up* past the maximum, so reparsing it
  * overflows. glibc's strtod reports that as an infinity, which this library
- * refuses (PB_TF_ERR_RANGE); picolibc's lands back on DBL_MAX and succeeds. Both
+ * refuses (-PB_TF_ERR_RANGE); picolibc's lands back on DBL_MAX and succeeds. Both
  * are accepted here -- what must never happen is a silent infinity.
  */
 ZTEST(pb_tf_float, test_double_precision_is_capped_at_16_digits)
@@ -2161,13 +2184,13 @@ ZTEST(pb_tf_float, test_double_precision_is_capped_at_16_digits)
 	fx_scalars_t a;
 	fx_scalars_t b;
 	char text[1024];
-	pb_tf_err_t err;
+	int err;
 
 	/* 15 digits: comfortably inside the cap, so exact. */
 	zassert_equal(pb_tf_parse(&fx_scalars_t_tf, &a, "f_double: 0.123456789012345", NULL),
 		      PB_TF_OK);
-	err = pb_tf_print_buf(&fx_scalars_t_tf, &a, text, sizeof(text));
-	if (err == PB_TF_ERR_UNSUPPORTED) {
+	err = pb_tf_print_buf_multiline(&fx_scalars_t_tf, &a, text, sizeof(text));
+	if (err == -PB_TF_ERR_UNSUPPORTED) {
 		ztest_test_skip();
 	}
 	zassert_equal(err, PB_TF_OK, "%s", pb_tf_strerror(err));
@@ -2178,12 +2201,12 @@ ZTEST(pb_tf_float, test_double_precision_is_capped_at_16_digits)
 	zassert_equal(pb_tf_parse(&fx_scalars_t_tf, &a, "f_double: 1.7976931348623157e308",
 				  NULL),
 		      PB_TF_OK);
-	err = pb_tf_print_buf(&fx_scalars_t_tf, &a, text, sizeof(text));
+	err = pb_tf_print_buf_multiline(&fx_scalars_t_tf, &a, text, sizeof(text));
 	zassert_equal(err, PB_TF_OK, "printing DBL_MAX must still succeed: %s",
 		      pb_tf_strerror(err));
 
 	err = pb_tf_parse(&fx_scalars_t_tf, &b, text, NULL);
-	zassert_true((err == PB_TF_OK) || (err == PB_TF_ERR_RANGE), "got %s for '%s'",
+	zassert_true((err == PB_TF_OK) || (err == -PB_TF_ERR_RANGE), "got %s for '%s'",
 		     pb_tf_strerror(err), text);
 	if (err == PB_TF_OK) {
 		zassert_true(isfinite(b.f_double), "a rounded DBL_MAX must not become inf");
@@ -2196,12 +2219,12 @@ ZTEST(pb_tf_float, test_nan_round_trips)
 	fx_scalars_t a;
 	fx_scalars_t b;
 	char text[1024];
-	pb_tf_err_t err;
+	int err;
 
 	zassert_equal(pb_tf_parse(&fx_scalars_t_tf, &a, "f_float: nan", NULL), PB_TF_OK);
 
-	err = pb_tf_print_buf(&fx_scalars_t_tf, &a, text, sizeof(text));
-	if (err == PB_TF_ERR_UNSUPPORTED) {
+	err = pb_tf_print_buf_multiline(&fx_scalars_t_tf, &a, text, sizeof(text));
+	if (err == -PB_TF_ERR_UNSUPPORTED) {
 		ztest_test_skip();
 	}
 	zassert_equal(err, PB_TF_OK, "%s", pb_tf_strerror(err));
@@ -2249,23 +2272,23 @@ ZTEST(pb_tf_float, test_full_scalars_round_trip)
 ZTEST(pb_tf_float, test_degrades_cleanly)
 {
 	fx_scalars_t m;
-	pb_tf_status_t st;
+	struct pb_tf_status st;
 	char out[1024];
 
 	zassert_equal(pb_tf_parse(&fx_scalars_t_tf, &m, "f_float: 1.5", &st),
-		      PB_TF_ERR_NO_FLOAT);
+		      -PB_TF_ERR_NO_FLOAT);
 	zassert_str_equal(st.field, "f_float");
 
 	zassert_equal(pb_tf_parse(&fx_scalars_t_tf, &m, "f_double: 1.5", &st),
-		      PB_TF_ERR_NO_FLOAT);
+		      -PB_TF_ERR_NO_FLOAT);
 
 	/* Integer fields in the same message are unaffected. */
 	zassert_equal(pb_tf_parse(&fx_scalars_t_tf, &m, "f_int32: 5", &st), PB_TF_OK);
 	zassert_equal(m.f_int32, 5);
 
 	/* Printing a message that has a float field reports it too. */
-	zassert_equal(pb_tf_print_buf(&fx_scalars_t_tf, &m, out, sizeof(out)),
-		      PB_TF_ERR_NO_FLOAT);
+	zassert_equal(pb_tf_print_buf_multiline(&fx_scalars_t_tf, &m, out, sizeof(out)),
+		      -PB_TF_ERR_NO_FLOAT);
 }
 
 #endif /* CONFIG_NANOPB_TEXTFORMAT_FLOAT */
@@ -2284,7 +2307,7 @@ ZTEST(pb_tf_float, test_degrades_cleanly)
  */
 ZTEST(pb_tf_macro, test_default_naming_style)
 {
-	const pb_tf_field_t *f;
+	const struct pb_tf_field *f;
 
 	zassert_equal_ptr(FxDef_tf.desc, &FxDef_msg);
 	zassert_equal(FxDef_tf.count, 7, "got %u", FxDef_tf.count);
@@ -2309,8 +2332,8 @@ ZTEST(pb_tf_macro, test_default_naming_style)
 ZTEST(pb_tf_parse, test_default_naming_style_parses)
 {
 	FxDef m;
-	pb_tf_status_t st;
-	pb_tf_err_t err = pb_tf_parse(&FxDef_tf, &m,
+	struct pb_tf_status st;
+	int err = pb_tf_parse(&FxDef_tf, &m,
 				      "plain: 1 opt: 2 rep: [3, 4] sub { a: 5 } text: \"hi\"",
 				      &st);
 

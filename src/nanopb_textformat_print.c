@@ -30,7 +30,7 @@
 
 /** One open message body. */
 struct pb_tf_pframe {
-	const pb_tf_msg_t *tf;
+	const struct pb_tf_msg *tf;
 	const void *msg;
 	/** Next row to visit. */
 	uint16_t index;
@@ -43,6 +43,17 @@ struct pb_tf_pframe {
 struct pb_tf_printer {
 	cbprintf_cb out;
 	void *ctx;
+	/**
+	 * Single line rather than one field per line.
+	 *
+	 * Carried here rather than read from Kconfig at each use, because an
+	 * application may want both: multi-line for a person reading a
+	 * configuration, compact for a line it means to paste or log. The
+	 * Kconfig option still decides what plain pb_tf_print() does.
+	 */
+	bool compact;
+	/** Wrap the whole message in braces. */
+	bool braces;
 	/** Indent applied to the outermost body: 1 when wrapped in braces. */
 	unsigned int base;
 	unsigned int top;
@@ -50,12 +61,12 @@ struct pb_tf_printer {
 };
 
 /*
- * Style is a build-time decision, so these are compile-time constants and the
- * unused branch of each is discarded rather than carried around.
+ * The line style and the braces are named by the caller, so they are not
+ * Kconfig. Skipping defaults still is: unlike the style, it is not something
+ * one firmware plausibly wants both ways, and making it per-call would double
+ * the number of entry points.
  */
-#define PB_TF_IS_COMPACT       IS_ENABLED(CONFIG_NANOPB_TEXTFORMAT_PRINT_COMPACT)
-#define PB_TF_IS_BRACED        IS_ENABLED(CONFIG_NANOPB_TEXTFORMAT_PRINT_BRACES)
-#define PB_TF_SKIPS_DEFAULTS   IS_ENABLED(CONFIG_NANOPB_TEXTFORMAT_PRINT_SKIP_DEFAULTS)
+#define PB_TF_SKIPS_DEFAULTS IS_ENABLED(CONFIG_NANOPB_TEXTFORMAT_PRINT_SKIP_DEFAULTS)
 
 /*
  * ---------------------------------------------------------------------------
@@ -74,7 +85,7 @@ static void pb_tf_put(struct pb_tf_printer *pr, char c)
 	(void)pr->out((int)(unsigned char)c, pr->ctx);
 }
 
-static pb_tf_err_t pb_tf_emit(struct pb_tf_printer *pr, const char *fmt, ...)
+static int pb_tf_emit(struct pb_tf_printer *pr, const char *fmt, ...)
 {
 	va_list ap;
 	int rc;
@@ -83,14 +94,12 @@ static pb_tf_err_t pb_tf_emit(struct pb_tf_printer *pr, const char *fmt, ...)
 	rc = cbvprintf(pr->out, pr->ctx, fmt, ap);
 	va_end(ap);
 
-	return (rc < 0) ? PB_TF_ERR_INTERNAL : PB_TF_OK;
+	return (rc < 0) ? -PB_TF_ERR_INTERNAL : 0;
 }
 
 static bool pb_tf_compact(const struct pb_tf_printer *pr)
 {
-	ARG_UNUSED(pr);
-
-	return PB_TF_IS_COMPACT;
+	return pr->compact;
 }
 
 static void pb_tf_indent(struct pb_tf_printer *pr)
@@ -226,14 +235,14 @@ static bool pb_tf_print_is_signed(uint8_t vtype)
  * nanopb's runtime pb_type_t cannot distinguish a float from a fixed32, so a
  * printer driven by the iterator alone could not tell whether to write 1.0 or 1.
  */
-static pb_tf_err_t pb_tf_print_int(struct pb_tf_printer *pr, const pb_tf_field_t *row,
+static int pb_tf_print_int(struct pb_tf_printer *pr, const struct pb_tf_field *row,
 				   pb_size_t data_size, const void *src)
 {
 	bool sign = pb_tf_print_is_signed(row->vtype);
 
 	if (data_size > sizeof(pb_tf_uint64_t)) {
 		/* An int64 field under PB_WITHOUT_64BIT; see the parser. */
-		return PB_TF_ERR_UNSUPPORTED;
+		return -PB_TF_ERR_UNSUPPORTED;
 	}
 
 	if (data_size > sizeof(uint32_t)) {
@@ -245,7 +254,7 @@ static pb_tf_err_t pb_tf_print_int(struct pb_tf_printer *pr, const pb_tf_field_t
 		 * same reason.
 		 */
 		if (!IS_ENABLED(CONFIG_CBPRINTF_FULL_INTEGRAL)) {
-			return PB_TF_ERR_UNSUPPORTED;
+			return -PB_TF_ERR_UNSUPPORTED;
 		}
 
 		if (sign) {
@@ -265,7 +274,7 @@ static pb_tf_err_t pb_tf_print_int(struct pb_tf_printer *pr, const pb_tf_field_t
 		} else if (data_size == sizeof(int_least8_t)) {
 			v = *(const int_least8_t *)src;
 		} else {
-			return PB_TF_ERR_INTERNAL;
+			return -PB_TF_ERR_INTERNAL;
 		}
 
 		return pb_tf_emit(pr, "%" PRId32, v);
@@ -280,19 +289,19 @@ static pb_tf_err_t pb_tf_print_int(struct pb_tf_printer *pr, const pb_tf_field_t
 	} else if (data_size == sizeof(uint_least8_t)) {
 		v = *(const uint_least8_t *)src;
 	} else {
-		return PB_TF_ERR_INTERNAL;
+		return -PB_TF_ERR_INTERNAL;
 	}
 
 	return pb_tf_emit(pr, "%" PRIu32, v);
 }
 
-static pb_tf_err_t pb_tf_print_scalar(struct pb_tf_printer *pr, const pb_tf_field_t *row,
+static int pb_tf_print_scalar(struct pb_tf_printer *pr, const struct pb_tf_field *row,
 				      pb_size_t data_size, const void *src)
 {
 	switch (row->vtype) {
 	case PB_TF_VT_BOOL:
 		if (data_size != sizeof(bool)) {
-			return PB_TF_ERR_INTERNAL;
+			return -PB_TF_ERR_INTERNAL;
 		}
 		/* Output is always the canonical spelling, whatever was parsed. */
 		return pb_tf_emit(pr, "%s", *(const bool *)src ? "true" : "false");
@@ -336,29 +345,29 @@ static pb_tf_err_t pb_tf_print_scalar(struct pb_tf_printer *pr, const pb_tf_fiel
 		if (data_size == sizeof(double)) {
 			return pb_tf_emit(pr, "%.17g", *(const double *)src);
 		}
-		return PB_TF_ERR_INTERNAL;
+		return -PB_TF_ERR_INTERNAL;
 #else
 		/* No floating-point formatting is referenced, so none is linked. */
-		return PB_TF_ERR_NO_FLOAT;
+		return -PB_TF_ERR_NO_FLOAT;
 #endif
 
 	case PB_TF_VT_STRING:
 		pb_tf_quoted(pr, (const pb_byte_t *)src, pb_tf_strnlen((const char *)src, data_size));
-		return PB_TF_OK;
+		return 0;
 
 	case PB_TF_VT_BYTES: {
 		const pb_bytes_array_t *arr = src;
 
 		pb_tf_quoted(pr, arr->bytes, (size_t)arr->size);
-		return PB_TF_OK;
+		return 0;
 	}
 
 	case PB_TF_VT_FIXED_LENGTH_BYTES:
 		pb_tf_quoted(pr, src, (size_t)data_size);
-		return PB_TF_OK;
+		return 0;
 
 	default:
-		return PB_TF_ERR_INTERNAL;
+		return -PB_TF_ERR_INTERNAL;
 	}
 }
 
@@ -369,7 +378,7 @@ static pb_tf_err_t pb_tf_print_scalar(struct pb_tf_printer *pr, const pb_tf_fiel
  * Only implicit-presence fields are eligible: an optional field is already
  * governed by its has_ bit, and a repeated one by its count.
  */
-static bool pb_tf_skip_default(const struct pb_tf_printer *pr, const pb_tf_field_t *row,
+static bool pb_tf_skip_default(const struct pb_tf_printer *pr, const struct pb_tf_field *row,
 			       pb_size_t data_size, const void *src)
 {
 	ARG_UNUSED(pr);
@@ -427,7 +436,7 @@ static bool pb_tf_skip_default(const struct pb_tf_printer *pr, const pb_tf_field
  * depth and 1.4 KB at the maximum -- the wrong trade for messages that have a
  * couple of dozen fields at most.
  */
-static pb_tf_err_t pb_tf_locate(const struct pb_tf_pframe *fr, const pb_tf_field_t *row,
+static int pb_tf_locate(const struct pb_tf_pframe *fr, const struct pb_tf_field *row,
 				pb_size_t elem, const void **src, pb_size_t *data_size,
 				pb_size_t *count)
 {
@@ -439,7 +448,7 @@ static pb_tf_err_t pb_tf_locate(const struct pb_tf_pframe *fr, const pb_tf_field
 	/* pb_field_iter_begin() reports false for a message with no fields. */
 	if (!pb_field_iter_begin(&it, fr->tf->desc, (void *)fr->msg) ||
 	    !pb_field_iter_find(&it, row->tag)) {
-		return PB_TF_ERR_INTERNAL;
+		return -PB_TF_ERR_INTERNAL;
 	}
 
 	*data_size = it.data_size;
@@ -458,7 +467,7 @@ static pb_tf_err_t pb_tf_locate(const struct pb_tf_pframe *fr, const pb_tf_field
 
 	case PB_TF_HT_REPEATED:
 		if (it.pSize == NULL) {
-			return PB_TF_ERR_INTERNAL;
+			return -PB_TF_ERR_INTERNAL;
 		}
 		*count = *(const pb_size_t *)it.pSize;
 		if (elem < *count) {
@@ -477,11 +486,11 @@ static pb_tf_err_t pb_tf_locate(const struct pb_tf_pframe *fr, const pb_tf_field
 		break;
 	}
 
-	return PB_TF_OK;
+	return 0;
 }
 
 /** Advance a frame's cursor past the occurrence just handled. */
-static void pb_tf_advance(struct pb_tf_pframe *fr, const pb_tf_field_t *row, pb_size_t count)
+static void pb_tf_advance(struct pb_tf_pframe *fr, const struct pb_tf_field *row, pb_size_t count)
 {
 	if (PB_TF_HT(row->rules) == PB_TF_HT_REPEATED) {
 		fr->elem++;
@@ -496,19 +505,19 @@ static void pb_tf_advance(struct pb_tf_pframe *fr, const pb_tf_field_t *row, pb_
 	fr->elem = 0U;
 }
 
-static pb_tf_err_t pb_tf_run_print(struct pb_tf_printer *pr)
+static int pb_tf_run_print(struct pb_tf_printer *pr)
 {
 	while (true) {
 		struct pb_tf_pframe *fr = &pr->stack[pr->top];
-		const pb_tf_field_t *row;
+		const struct pb_tf_field *row;
 		const void *src;
 		pb_size_t data_size = 0U;
 		pb_size_t count = 1U;
-		pb_tf_err_t err;
+		int err;
 
 		if (fr->index >= fr->tf->count) {
 			if (pr->top == 0U) {
-				return PB_TF_OK;
+				return 0;
 			}
 
 			/* Close this body; the parent's cursor already moved on. */
@@ -537,7 +546,7 @@ static pb_tf_err_t pb_tf_run_print(struct pb_tf_printer *pr)
 		}
 
 		err = pb_tf_locate(fr, row, fr->elem, &src, &data_size, &count);
-		if (err != PB_TF_OK) {
+		if (err != 0) {
 			return err;
 		}
 
@@ -550,15 +559,15 @@ static pb_tf_err_t pb_tf_run_print(struct pb_tf_printer *pr)
 
 		if (pb_tf_vtype_is_msg(row->vtype)) {
 			if (row->sub == NULL) {
-				return PB_TF_ERR_INTERNAL;
+				return -PB_TF_ERR_INTERNAL;
 			}
 			if (pr->top >= (unsigned int)PB_TF_MAX_DEPTH) {
-				return PB_TF_ERR_DEPTH;
+				return -PB_TF_ERR_DEPTH;
 			}
 
 			pb_tf_field_prefix(pr, fr);
 			err = pb_tf_emit(pr, "%s {", row->name);
-			if (err != PB_TF_OK) {
+			if (err != 0) {
 				return err;
 			}
 			if (!pb_tf_compact(pr)) {
@@ -579,12 +588,12 @@ static pb_tf_err_t pb_tf_run_print(struct pb_tf_printer *pr)
 
 		pb_tf_field_prefix(pr, fr);
 		err = pb_tf_emit(pr, "%s: ", row->name);
-		if (err != PB_TF_OK) {
+		if (err != 0) {
 			return err;
 		}
 
 		err = pb_tf_print_scalar(pr, row, data_size, src);
-		if (err != PB_TF_OK) {
+		if (err != 0) {
 			return err;
 		}
 
@@ -593,18 +602,21 @@ static pb_tf_err_t pb_tf_run_print(struct pb_tf_printer *pr)
 	}
 }
 
-pb_tf_err_t pb_tf_print(const pb_tf_msg_t *tf, const void *msg, cbprintf_cb out, void *ctx)
+static int pb_tf_print_styled(const struct pb_tf_msg *tf, const void *msg, cbprintf_cb out,
+				      void *ctx, bool compact, bool braces)
 {
 	struct pb_tf_printer pr;
-	pb_tf_err_t err;
+	int err;
 
 	if ((tf == NULL) || (msg == NULL) || (out == NULL)) {
-		return PB_TF_ERR_INTERNAL;
+		return -PB_TF_ERR_INTERNAL;
 	}
 
 	pr.out = out;
 	pr.ctx = ctx;
-	pr.base = PB_TF_IS_BRACED ? 1U : 0U;
+	pr.compact = compact;
+	pr.braces = braces;
+	pr.base = braces ? 1U : 0U;
 	pr.top = 0U;
 
 	pr.stack[0].tf = tf;
@@ -613,7 +625,7 @@ pb_tf_err_t pb_tf_print(const pb_tf_msg_t *tf, const void *msg, cbprintf_cb out,
 	pr.stack[0].elem = 0U;
 	pr.stack[0].flags = PB_TF_PF_FIRST;
 
-	if (PB_TF_IS_BRACED) {
+	if (pr.braces) {
 		pb_tf_put(&pr, '{');
 		if (!pb_tf_compact(&pr)) {
 			pb_tf_put(&pr, '\n');
@@ -621,27 +633,28 @@ pb_tf_err_t pb_tf_print(const pb_tf_msg_t *tf, const void *msg, cbprintf_cb out,
 	}
 
 	err = pb_tf_run_print(&pr);
-	if (err != PB_TF_OK) {
+	if (err != 0) {
 		return err;
 	}
 
-	if (PB_TF_IS_BRACED) {
+	if (pr.braces) {
 		pb_tf_put(&pr, '}');
 		if (!pb_tf_compact(&pr)) {
 			pb_tf_put(&pr, '\n');
 		}
 	}
 
-	return PB_TF_OK;
+	return 0;
 }
 
-pb_tf_err_t pb_tf_print_buf(const pb_tf_msg_t *tf, const void *msg, char *buf, size_t size)
+static int pb_tf_print_buf_styled(const struct pb_tf_msg *tf, const void *msg, char *buf,
+					  size_t size, bool compact, bool braces)
 {
-	pb_tf_buf_t sink;
-	pb_tf_err_t err;
+	struct pb_tf_buf sink;
+	int err;
 
 	if ((buf == NULL) || (size == 0U)) {
-		return PB_TF_ERR_INTERNAL;
+		return -PB_TF_ERR_INTERNAL;
 	}
 
 	/*
@@ -655,10 +668,74 @@ pb_tf_err_t pb_tf_print_buf(const pb_tf_msg_t *tf, const void *msg, char *buf, s
 	sink.used = 0U;
 	sink.overflow = false;
 
-	err = pb_tf_print(tf, msg, pb_tf_out_buf, &sink);
-	if (err != PB_TF_OK) {
+	err = pb_tf_print_styled(tf, msg, pb_tf_out_buf, &sink, compact, braces);
+	if (err != 0) {
 		return err;
 	}
 
-	return sink.overflow ? PB_TF_ERR_NO_SPACE : PB_TF_OK;
+	return sink.overflow ? -PB_TF_ERR_NO_SPACE : 0;
+}
+
+/*
+ * The public entry points.
+ *
+ * Each names the output it produces, so a call site is self-describing and a
+ * firmware can use more than one shape: multi-line for a person reading a
+ * configuration, compact for a line it means to paste back in or log. There is
+ * deliberately no style-agnostic pb_tf_print(), because its output would depend
+ * on a Kconfig the reader has to go and look up.
+ *
+ * Zephyr compiles with -ffunction-sections and links with --gc-sections, so a
+ * variant an application never calls costs nothing in the final image.
+ *
+ * CONFIG_NANOPB_TEXTFORMAT_PRINT_SKIP_DEFAULTS stays Kconfig-only on purpose:
+ * making it per-call as well would double this list again, and unlike the line
+ * style it is not something an application plausibly wants both ways in the
+ * same firmware.
+ */
+
+int pb_tf_print_compact(const struct pb_tf_msg *tf, const void *msg, cbprintf_cb out, void *ctx)
+{
+	return pb_tf_print_styled(tf, msg, out, ctx, true, false);
+}
+
+int pb_tf_print_multiline(const struct pb_tf_msg *tf, const void *msg, cbprintf_cb out,
+				  void *ctx)
+{
+	return pb_tf_print_styled(tf, msg, out, ctx, false, false);
+}
+
+int pb_tf_print_compact_braces(const struct pb_tf_msg *tf, const void *msg, cbprintf_cb out,
+				       void *ctx)
+{
+	return pb_tf_print_styled(tf, msg, out, ctx, true, true);
+}
+
+int pb_tf_print_multiline_braces(const struct pb_tf_msg *tf, const void *msg, cbprintf_cb out,
+					 void *ctx)
+{
+	return pb_tf_print_styled(tf, msg, out, ctx, false, true);
+}
+
+int pb_tf_print_buf_compact(const struct pb_tf_msg *tf, const void *msg, char *buf, size_t size)
+{
+	return pb_tf_print_buf_styled(tf, msg, buf, size, true, false);
+}
+
+int pb_tf_print_buf_multiline(const struct pb_tf_msg *tf, const void *msg, char *buf,
+				      size_t size)
+{
+	return pb_tf_print_buf_styled(tf, msg, buf, size, false, false);
+}
+
+int pb_tf_print_buf_compact_braces(const struct pb_tf_msg *tf, const void *msg, char *buf,
+					   size_t size)
+{
+	return pb_tf_print_buf_styled(tf, msg, buf, size, true, true);
+}
+
+int pb_tf_print_buf_multiline_braces(const struct pb_tf_msg *tf, const void *msg, char *buf,
+					     size_t size)
+{
+	return pb_tf_print_buf_styled(tf, msg, buf, size, false, true);
 }

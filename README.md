@@ -7,8 +7,9 @@ back out. No heap, no scratch buffers, no recursion.
 
 > **Experimental: 0.x, and the API can change.**
 >
-> Two of the five releases so far removed something — 0.3.0 deleted the runtime flag arguments,
-> 0.4.0 deleted a Kconfig snippet. Both were minor bumps, which is what semver means by 0.x.
+> Three of the six releases so far removed something — 0.3.0 deleted the runtime flag arguments,
+> 0.4.0 deleted a Kconfig snippet, 0.6.0 replaced the print functions and dropped the typedefs.
+> All minor bumps, which is what semver means by 0.x.
 > **Pin a tag**, and read the release notes before moving it. [Versioning](#versioning) says what is
 > more settled and what is less.
 
@@ -71,7 +72,7 @@ manifest:
   projects:
     - name: zephyr-nanopb-textformat
       remote: rodrigopex
-      revision: v0.5.0
+      revision: v0.6.0
       path: modules/lib/zephyr-nanopb-textformat
 ```
 
@@ -100,15 +101,15 @@ PB_TF_DEFINE(UI_CONFIG, ui_config_t);   /* mirrors PB_BIND's two-token form */
 
 ```c
 struct ui_config cfg;
-pb_tf_status_t st;
+struct pb_tf_status st;
 
-if (pb_tf_parse(&ui_config_t_tf, &cfg, "delay: 100, threshold: 500", &st) != PB_TF_OK) {
+if (pb_tf_parse(&ui_config_t_tf, &cfg, "delay: 100, threshold: 500", &st) != 0) {
 	printk("at offset %u: %s\n", st.offset, pb_tf_strerror(st.code));
 }
 
 char text[128];
 
-(void)pb_tf_print_buf(&ui_config_t_tf, &cfg, text, sizeof(text));
+(void)pb_tf_print_buf_multiline(&ui_config_t_tf, &cfg, text, sizeof(text));
 ```
 
 ```
@@ -165,37 +166,55 @@ at offset 25: too many values in field 'path'
 ## API
 
 ```c
-pb_tf_err_t pb_tf_parse(const pb_tf_msg_t *tf, void *msg, const char *text,
-                        pb_tf_status_t *status);   /* clears msg first */
-pb_tf_err_t pb_tf_merge(const pb_tf_msg_t *tf, void *msg, const char *text,
-                        pb_tf_status_t *status);   /* keeps what is there */
-pb_tf_err_t pb_tf_print(const pb_tf_msg_t *tf, const void *msg,
-                        cbprintf_cb out, void *ctx);
-pb_tf_err_t pb_tf_print_buf(const pb_tf_msg_t *tf, const void *msg,
-                            char *buf, size_t size);
-void        pb_tf_clear(const pb_tf_msg_t *tf, void *msg);
-const char *pb_tf_strerror(pb_tf_err_t code);
+/* parsing -- clears msg first, or keeps what is there */
+int pb_tf_parse(const struct pb_tf_msg *tf, void *msg, const char *text,
+                struct pb_tf_status *status);
+int pb_tf_merge(const struct pb_tf_msg *tf, void *msg, const char *text,
+                struct pb_tf_status *status);
+
+/* printing into a buffer -- the style is in the name */
+int pb_tf_print_buf_multiline       (tf, msg, char *buf, size_t size);
+int pb_tf_print_buf_compact         (tf, msg, char *buf, size_t size);
+int pb_tf_print_buf_multiline_braces(tf, msg, char *buf, size_t size);
+int pb_tf_print_buf_compact_braces  (tf, msg, char *buf, size_t size);
+
+/* printing to your own sink, same four styles */
+int pb_tf_print_multiline       (tf, msg, cbprintf_cb out, void *ctx);
+int pb_tf_print_compact         (tf, msg, cbprintf_cb out, void *ctx);
+int pb_tf_print_multiline_braces(tf, msg, cbprintf_cb out, void *ctx);
+int pb_tf_print_compact_braces  (tf, msg, cbprintf_cb out, void *ctx);
+
+void        pb_tf_clear(const struct pb_tf_msg *tf, void *msg);
+const char *pb_tf_strerror(int err);
 int         pb_tf_out_buf(int c, void *ctx);   /* a bundled cbprintf_cb */
 ```
 
-Either half is optional: `CONFIG_NANOPB_TEXTFORMAT_PARSE=n` drops the first two functions,
-`CONFIG_NANOPB_TEXTFORMAT_PRINT=n` drops the next two. Both default to `y`, and `pb_tf_clear()`,
-`pb_tf_strerror()` and `pb_tf_out_buf()` are always present. See [Cost](#cost) for what each saves.
+**Every function returns `int`: 0 on success, a negated `enum pb_tf_err` on failure**, as Zephyr
+functions do. The enumerators are positive, so a caller compares against `-PB_TF_ERR_RANGE`;
+`pb_tf_strerror()` takes either sign. There are no `typedef`s — the types are `struct pb_tf_msg`,
+`struct pb_tf_status` and so on, spelled out.
 
-**There are no runtime flags.** Output style is a Kconfig choice, so a firmware states it once
-rather than at every call site, and the unused branches are not compiled:
+**The output style is in the function name, not an argument and not a Kconfig.** A call site therefore
+says what it produces, and one firmware can use more than one shape — multi-line for a person reading
+a configuration, compact for a line it means to paste back in or log. There is deliberately no
+style-agnostic `pb_tf_print()`: its output would depend on a setting the reader has to go and look up.
 
-| | |
-|---|---|
-| `NANOPB_TEXTFORMAT_PRINT_MULTILINE` | one field per line, submessages indented (default) |
-| `NANOPB_TEXTFORMAT_PRINT_COMPACT` | a single line — the shortest form that still re-parses |
-| `NANOPB_TEXTFORMAT_PRINT_BRACES` | wrap the whole message in `{ }` |
-| `NANOPB_TEXTFORMAT_PRINT_SKIP_DEFAULTS` | omit implicit-presence fields that are still zero |
+Zephyr compiles with `-ffunction-sections` and links with `--gc-sections`, so a variant your
+application never calls costs nothing in the final image. Each is 16–20 bytes on Cortex-M3 when it
+is used.
 
-Print-all is the default, so a printed message shows every field and round-trips byte-exact into a
-cleared struct. Replace-versus-merge is likewise two named functions rather than a flag.
+Either half is optional: `CONFIG_NANOPB_TEXTFORMAT_PARSE=n` drops the two parsing functions,
+`CONFIG_NANOPB_TEXTFORMAT_PRINT=n` drops the eight printing ones. Both default to `y`, and
+`pb_tf_clear()`, `pb_tf_strerror()` and `pb_tf_out_buf()` are always present. See [Cost](#cost) for
+what each saves.
 
-Prefer `pb_tf_print_buf()` over `pb_tf_print()` + `pb_tf_out_buf()`. It terminates the buffer even
+One print modifier stays a build option: `CONFIG_NANOPB_TEXTFORMAT_PRINT_SKIP_DEFAULTS` omits
+implicit-presence fields that are still zero. It is Kconfig rather than per-call because, unlike the
+line style, it is not something one firmware plausibly wants both ways — and making it per-call would
+double the eight entry points to sixteen. Print-all is the default, so a printed message shows every
+field and round-trips byte-exact into a cleared struct.
+
+Prefer the `pb_tf_print_buf_*` forms over `pb_tf_print_*` + `pb_tf_out_buf()`. They terminate the buffer even
 when a message prints nothing, and reports truncation as `PB_TF_ERR_NO_SPACE` rather than a flag you
 have to remember to check.
 
@@ -272,7 +291,7 @@ compile-time constant rather than a function of the input:
 Both grow linearly with `CONFIG_NANOPB_TEXTFORMAT_MAX_DEPTH`, at 20 bytes per level for the parser
 and 16 for the printer, on top of a fixed frame. Measured:
 
-| `MAX_DEPTH` | `pb_tf_parse()` | `pb_tf_print()` |
+| `MAX_DEPTH` | parsing | printing |
 |---|---|---|
 | 1 | 160 B | 144 B |
 | **8 (default)** | **304 B** | **264 B** |
@@ -329,14 +348,13 @@ you raise `CONFIG_NANOPB_TEXTFORMAT_MAX_DEPTH`, add 20 bytes per level.
 with several `max_size:64` strings is not — make it `static` or hand in a pointer to one you already
 own, exactly as you would with nanopb itself.
 
-**Use `pb_tf_print_buf()`, not `pb_tf_print()` + `pb_tf_out_buf()`**, unless you specifically want to
-stream. It terminates the buffer even when a message prints nothing, and reports truncation as
+**Use a `pb_tf_print_buf_*` form, not `pb_tf_print_*` + `pb_tf_out_buf()`**, unless you specifically
+want to stream. It terminates the buffer even when a message prints nothing, and reports truncation as
 `PB_TF_ERR_NO_SPACE` instead of a flag you have to remember to check.
 
 **Prefer compact output for anything you intend to feed back in.**
-`CONFIG_NANOPB_TEXTFORMAT_PRINT_COMPACT=y` without `_PRINT_BRACES` is the shortest form that is
-still valid standalone text format, which matters when `CONFIG_SHELL_CMD_BUFF_SIZE` caps the line at
-256 bytes by default.
+`pb_tf_print_buf_compact()` is the shortest form that is still valid standalone text format, which
+matters when `CONFIG_SHELL_CMD_BUFF_SIZE` caps the line at 256 bytes by default.
 
 **Report errors with the offset and the field.** `pb_tf_strerror()` names only the fault, so it
 composes:
@@ -363,9 +381,9 @@ that guide used to recommend and no longer does.
 | `NANOPB_TEXTFORMAT` | `n` | Enable the module |
 | `NANOPB_TEXTFORMAT_FLOAT` | `y` | Float and double support. `depends on !MINIMAL_LIBC` (needs `strtod`) and selects `CBPRINTF_FP_SUPPORT`. `n` makes float fields report `PB_TF_ERR_NO_FLOAT` in both directions and saves 8–12 KB of flash, depending on what else in the image formats floats |
 | `NANOPB_TEXTFORMAT_MAX_DEPTH` | `8` | Submessage nesting limit, range 1–32. Costs 20 bytes of stack per level |
-| `NANOPB_TEXTFORMAT_PRINT_*` | multi-line | Output style; see [API](#api) |
-| `NANOPB_TEXTFORMAT_PARSE` | `y` | Build `pb_tf_parse()` / `pb_tf_merge()`. `n` drops 3317 B |
-| `NANOPB_TEXTFORMAT_PRINT` | `y` | Build `pb_tf_print()` / `pb_tf_print_buf()`. `n` drops 1187 B |
+| `NANOPB_TEXTFORMAT_PRINT_SKIP_DEFAULTS` | `n` | Omit implicit-presence fields that are still zero |
+| `NANOPB_TEXTFORMAT_PARSE` | `y` | Build the two parsing functions. `n` drops 3317 B |
+| `NANOPB_TEXTFORMAT_PRINT` | `y` | Build the eight printing functions. `n` drops ~1330 B |
 
 ### cbprintf
 
@@ -437,7 +455,7 @@ forced it.
 
 ## Versioning
 
-[Semantic versioning](https://semver.org). The current version is **0.5.0**.
+[Semantic versioning](https://semver.org). The current version is **0.6.0**.
 
 **Major is 0, and that is meant literally: the API can change, and has.** Not because the library is
 unfinished — it is feature-complete against its design, with 1722 test cases across 16
@@ -450,6 +468,7 @@ turning up, usually from someone integrating it:
 | 0.3.0 | **removed** the runtime `flags` arguments in favour of Kconfig |
 | 0.4.0 | **removed** a Kconfig snippet, and withdrew advice to disable shell wildcards |
 | 0.5.0 | added `PARSE` / `PRINT`, so either half can be left out (both still default `y`) |
+| 0.6.0 | **replaced** the print functions with eight style-named ones, **removed** the `_t` typedefs, and switched to `int` returns |
 
 Both removals were minor bumps. That is correct semver for 0.x — a breaking change does not force a
 major bump until 1.0 — but it does mean **`revision: main` will eventually break your build**. Pin a
@@ -476,7 +495,7 @@ change still ships as a minor bump:
   one, because it breaks messages that used to work. `docs/dialect.md` is the contract.
 - **Printed output.** A change that stops previously-printed text from reparsing — here or under
   `protoc` — is a major bump.
-- **Descriptor layout.** `PB_TF_DEFINE` bakes `pb_tf_field_t` into *your* object files, so changing it
+- **Descriptor layout.** `PB_TF_DEFINE` bakes `struct pb_tf_field` into *your* object files, so changing it
   is an ABI break and a major bump.
 
 Maps, enum values by name, and `\U` escapes are deliberately absent today; adding any of them would

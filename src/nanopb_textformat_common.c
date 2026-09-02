@@ -7,14 +7,14 @@
 
 #include "nanopb_textformat_priv.h"
 
-const pb_tf_field_t *pb_tf_field_find(const pb_tf_msg_t *tf, const char *name, size_t len)
+const struct pb_tf_field *pb_tf_field_find(const struct pb_tf_msg *tf, const char *name, size_t len)
 {
 	if ((tf == NULL) || (name == NULL) || (len == 0U)) {
 		return NULL;
 	}
 
 	for (uint16_t i = 0U; i < tf->count; i++) {
-		const pb_tf_field_t *f = &tf->fields[i];
+		const struct pb_tf_field *f = &tf->fields[i];
 
 		if ((f->name == NULL) || (f->vtype == PB_TF_VT_EXTENSION)) {
 			continue;
@@ -33,7 +33,7 @@ bool pb_tf_vtype_is_msg(uint8_t vtype)
 	return (vtype == PB_TF_VT_MESSAGE) || (vtype == PB_TF_VT_MSG_W_CB);
 }
 
-bool pb_tf_shape_supported(const pb_tf_field_t *f)
+bool pb_tf_shape_supported(const struct pb_tf_field *f)
 {
 	if (PB_TF_AT(f->rules) != PB_TF_AT_STATIC) {
 		return false;
@@ -46,16 +46,25 @@ bool pb_tf_shape_supported(const pb_tf_field_t *f)
 	return f->vtype != PB_TF_VT_EXTENSION;
 }
 
-void pb_tf_clear(const pb_tf_msg_t *tf, void *msg)
+void pb_tf_clear(const struct pb_tf_msg *tf, void *msg)
 {
 	if ((tf != NULL) && (msg != NULL)) {
 		(void)memset(msg, 0, tf->struct_size);
 	}
 }
 
-const char *pb_tf_strerror(pb_tf_err_t code)
+const char *pb_tf_strerror(int err)
 {
-	switch (code) {
+	/*
+	 * Accepts either sign, since the functions return a negated code but the
+	 * enumerators themselves are positive. A caller can pass whichever it
+	 * has -- a return value, or status.code -- without thinking about it.
+	 */
+	if (err < 0) {
+		err = -err;
+	}
+
+	switch ((enum pb_tf_err)err) {
 	case PB_TF_OK:
 		return "ok";
 	case PB_TF_ERR_SYNTAX:
@@ -85,7 +94,7 @@ const char *pb_tf_strerror(pb_tf_err_t code)
 
 int pb_tf_out_buf(int c, void *ctx)
 {
-	pb_tf_buf_t *b = ctx;
+	struct pb_tf_buf *b = ctx;
 
 	/* Keep one byte for the terminator at all times. */
 	if ((b->buf == NULL) || (b->size == 0U)) {

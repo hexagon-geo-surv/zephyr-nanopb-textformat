@@ -622,10 +622,14 @@ reading; fact 9's line numbers re-verified and its wildcard caveat strengthened.
 One API addition beyond the plan: `pb_tf_print_buf()`, because `pb_tf_out_buf()` cannot terminate a
 buffer for a message that prints nothing.
 
-**Superseded after 0.1.0, so read the flags below as history.** The runtime `flags` arguments this
-document designs — `PB_TF_NOINIT` and the four print flags — were replaced in 0.3.0 by Kconfig
-options plus a second function, `pb_tf_merge()`. `README.md` and `docs/dialect.md` describe the
-library as it is; this file describes how it was arrived at.
+**Superseded after 0.1.0, so read the API below as history.** `README.md` and `docs/dialect.md`
+describe the library as it is; this file describes how it was arrived at. What changed:
+
+- the runtime `flags` arguments designed here — `PB_TF_NOINIT` and the four print flags — became
+  Kconfig options plus `pb_tf_merge()` in 0.3.0, and then, for the print style, eight
+  style-named functions in 0.6.0;
+- the `_t` typedefs used throughout became plain `struct` and `enum` tags in 0.6.0, and the
+  functions returning `pb_tf_err_t` now return `int` — 0 or a negated code, as Zephyr does.
 
 What remains is consumption by an application, listed under "Out of scope" above and deliberately
 not part of this repository. `samples/textformat/` shows the shape of it.
