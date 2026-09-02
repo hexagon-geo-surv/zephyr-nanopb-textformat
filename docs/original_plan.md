@@ -622,5 +622,10 @@ reading; fact 9's line numbers re-verified and its wildcard caveat strengthened.
 One API addition beyond the plan: `pb_tf_print_buf()`, because `pb_tf_out_buf()` cannot terminate a
 buffer for a message that prints nothing.
 
+**Superseded after 0.1.0, so read the flags below as history.** The runtime `flags` arguments this
+document designs — `PB_TF_NOINIT` and the four print flags — were replaced in 0.3.0 by Kconfig
+options plus a second function, `pb_tf_merge()`. `README.md` and `docs/dialect.md` describe the
+library as it is; this file describes how it was arrived at.
+
 What remains is consumption by an application, listed under "Out of scope" above and deliberately
 not part of this repository. `samples/textformat/` shows the shape of it.

@@ -171,7 +171,8 @@ and a reproduction, which is why it is stated as mechanism here rather than as a
 
 Use `pb_tf_print_buf()` rather than `pb_tf_print()` + `pb_tf_out_buf()` unless you have a reason not
 to. It terminates the buffer even when the message prints nothing — an empty message, or every field
-skipped under `PB_TF_SKIP_DEFAULTS` — and turns truncation into `PB_TF_ERR_NO_SPACE` instead of a
+skipped under `CONFIG_NANOPB_TEXTFORMAT_PRINT_SKIP_DEFAULTS` — and turns truncation into
+`PB_TF_ERR_NO_SPACE` instead of a
 flag you have to remember to check.
 
 ```c
