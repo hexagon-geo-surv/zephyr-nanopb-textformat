@@ -43,7 +43,7 @@ manifest:
   projects:
     - name: zephyr-nanopb-textformat
       remote: rodrigopex
-      revision: v0.3.0
+      revision: v0.4.0
       path: modules/lib/zephyr-nanopb-textformat
 ```
 
@@ -88,16 +88,11 @@ CONFIG_NANOPB=y
 CONFIG_NANOPB_TEXTFORMAT=y
 ```
 
-That is all the library itself needs. If you are driving it from a shell command, take the snippet
-this module ships rather than assembling the settings by hand:
-
-```sh
-west build -S nanopb-textformat-shell -b <board> <app>
-```
+That is all the library needs. Driving it from a shell command needs a couple of *application*
+settings too — see [docs/shell-integration.md](docs/shell-integration.md).
 
 For driving this from a shell command, see **[docs/shell-integration.md](docs/shell-integration.md)**:
-it needs `SHELL_OPT_ARG_RAW` on a leaf command, and `CONFIG_SHELL_WILDCARD=n`, because wildcard
-expansion rewrites the command buffer before the handler sees it.
+it needs `SHELL_OPT_ARG_RAW` on a leaf command, and two shell buffers raised.
 
 ## Try it
 
@@ -315,11 +310,11 @@ if (st.field != NULL) {
 }
 ```
 
-**Driving it from a shell? Use the snippet.** `west build -S nanopb-textformat-shell` applies the
-four settings a raw text-format argument needs. The one you would never guess:
-`CONFIG_SHELL_BACKEND_SERIAL_RX_RING_BUFFER_SIZE` defaults to **64 bytes**, so a *pasted* message is
-silently truncated mid-parse while the same line typed by hand works.
-[docs/shell-integration.md](docs/shell-integration.md) explains all four.
+**Driving it from a shell? Read the one caveat you would never guess.**
+`CONFIG_SHELL_BACKEND_SERIAL_RX_RING_BUFFER_SIZE` defaults to **64 bytes**, sized for a keyboard, so
+a *pasted* message is silently truncated mid-parse while the same line typed by hand works.
+[docs/shell-integration.md](docs/shell-integration.md) has that and the rest — including one setting
+that guide used to recommend and no longer does.
 
 ## Configuration
 
@@ -397,7 +392,7 @@ forced it.
 
 ## Versioning
 
-[Semantic versioning](https://semver.org). The current version is **0.3.0**.
+[Semantic versioning](https://semver.org). The current version is **0.4.0**.
 
 Major is still 0, which means the API may change — the library is complete and tested, but nobody
 outside this repository has used it yet, and the error strings were reworded as recently as the first

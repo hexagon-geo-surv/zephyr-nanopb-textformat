@@ -169,14 +169,12 @@ run: **`mandatory` counts the command word plus any tokenized arguments, and the
 `argc` can be 1 — guard before reading `argv[1]`. Zephyr's own
 `tests/subsys/shell/shell/src/main.c` asserts both shapes.
 
-It is built with `-S nanopb-textformat-shell`, the snippet this module ships, so the sample is also
-the test that the snippet resolves and applies.
-
 To drive it non-interactively, pipe lines into `west build -t run` with a short pause between them.
 An earlier version of this file blamed garbled unpaced input on the console mux; that was wrong. The
 cause is `CONFIG_SHELL_BACKEND_SERIAL_RX_RING_BUFFER_SIZE`, which defaults to **64 bytes** and is
 sized for a keyboard — anything pasted or piped past that is dropped, silently, before the handler
-sees it. The snippet raises it to 1024, and pacing then only matters for reading the transcript.
+sees it. The sample raises it in its own prj.conf, and pacing then only matters for reading the
+transcript.
 
 ## Tests
 
@@ -246,6 +244,25 @@ type distinction fails there and nowhere else. Extend it when adding a field sha
   as `"src/fixture.pb.h"`.
 - The test app is a **white-box** suite: it includes `src/nanopb_textformat_priv.h` for internal
   helpers, via a `target_include_directories` entry pointing at the library's `src/`.
+
+## Two corrections worth not repeating
+
+**`CONFIG_SHELL_WILDCARD=n` is not needed for a raw leaf at `mandatory = 1`.** This guide, the README
+and a public PR comment all said it was, on plausible-sounding reasoning about wildcard expansion
+rewriting `cmd_buff`. The reasoning was wrong: in `execute()` the tokenising loop is gated on
+`args_left > 0` and calls `z_shell_wildcard_process()` from inside it, while a RAW leaf gets
+`args_left = mandatory - 1` — zero at `mandatory = 1`. Nothing after the command name is ever offered
+to wildcard processing. Verified with `WILDCARD=y`: `a*b`, `q?z`, `x*y?z` round-trip byte-identical.
+It *does* still apply at `mandatory >= 2`. A downstream integration caught this, with source
+references and a reproduction.
+
+**The library shipped a Kconfig snippet it had no business shipping.** `nanopb-textformat-shell`
+bundled five settings; by the time the printer used width-correct conversions and the module gained
+`depends on CBPRINTF_COMPLETE`, two were redundant and the other three were application shell tuning
+with magic numbers sized for one consumer's message. Its own comment had also gone stale and
+contradicted the Kconfig help. Removed in 0.4.0. The general lesson: this library has no shell
+dependency, so shell configuration belongs in `docs/shell-integration.md` with reasons, not in
+something the module ships as if it were a requirement.
 
 ## Versioning
 

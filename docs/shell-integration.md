@@ -89,23 +89,13 @@ argument first — `config <instance> <message>`, say. Zephyr's own
 Note also that the raw argument is **optional**: with `mandatory = 1`, `argc` can be 1 when the user
 types the command with nothing after it. Check `argc` before reading `argv[1]`.
 
-## Just apply the snippet
+## Three caveats that come with raw arguments
 
-Every setting below ships as a snippet in this module, so you do not have to assemble the list:
+The first follows from "untouched" and is a usage note. The other two are build settings whose right
+values depend on how long your messages are, so size them yourself rather than copying a number.
 
-```sh
-west build -S nanopb-textformat-shell -b <board> <app>
-```
-
-It sets `CONFIG_SHELL_WILDCARD=n`, raises the command buffer and the serial RX ring buffer, and
-pins the two cbprintf conversions. `samples/textformat/` is built exactly that way, so it is also
-the test that the snippet works. Read on if you would rather apply them individually, or want to
-know why each one is there.
-
-## Four caveats that come with raw arguments
-
-The first follows from "untouched" and is a usage note. The other three are build settings, and the
-last of them is the one most likely to waste an afternoon.
+None of these are library requirements — the library never sees the shell. They are what a *shell
+command* needs in order to hand it an intact argument.
 
 ### 1. Do not wrap the argument in quotes
 
@@ -131,26 +121,7 @@ CONFIG_SHELL_CMD_BUFF_SIZE=512
 Build with `CONFIG_NANOPB_TEXTFORMAT_PRINT_COMPACT=y` (and not `_PRINT_BRACES`) when generating text
 meant to be pasted back in, since it is the shortest form that still re-parses.
 
-### 3. Turn `CONFIG_SHELL_WILDCARD` off
-
-```
-CONFIG_SHELL_WILDCARD=n
-```
-
-Not conditionally — do this as a matter of course when a command takes a raw text-format argument.
-
-`CONFIG_SHELL_WILDCARD` is `default y if !SHELL_MINIMAL`, so it is on unless you turn it off, and
-wildcard expansion **rewrites `cmd_buff`** before the handler ever sees it. A `*` or `?` anywhere in
-the raw argument — including inside a quoted string value, which the shell has no reason to treat as
-quoted — gets expanded against the command table. The handler then receives text the user did not
-type, and the failure is silent and confusing rather than an error.
-
-There is no workaround on the command side: by the time the handler runs, the damage is done. It has
-to be a build decision, so make it once and be done with it. The only reason to leave it on is if
-something else in your firmware genuinely depends on shell wildcards, in which case keep `*` and `?`
-out of your message values entirely.
-
-### 4. Raise `CONFIG_SHELL_BACKEND_SERIAL_RX_RING_BUFFER_SIZE`
+### 3. Raise `CONFIG_SHELL_BACKEND_SERIAL_RX_RING_BUFFER_SIZE`
 
 ```
 CONFIG_SHELL_BACKEND_SERIAL_RX_RING_BUFFER_SIZE=1024
@@ -170,6 +141,31 @@ you copy the very output that `cfg get set` produced for you to paste back.
 
 Raise it to comfortably exceed your longest message. It is receive-buffer RAM, so the cost is one
 allocation of that size.
+
+## What you do *not* need: `CONFIG_SHELL_WILDCARD=n`
+
+An earlier version of this guide told you to disable wildcard expansion, on the reasoning that it
+rewrites `cmd_buff` before the handler runs and would corrupt a `*` or `?` inside a message. **For
+the pattern above — a raw leaf at `mandatory = 1` — that is wrong, and disabling it costs about 2 KB
+and a shell feature for nothing.**
+
+The mechanism, in `execute()` in `subsys/shell/shell.c`: the tokenising loop is gated on
+`args_left > 0`, and `z_shell_wildcard_process()` is called from inside that loop. A RAW leaf gets
+`args_left = mandatory - 1` (`shell.c:589`), so at `mandatory = 1` it is **zero** and the loop body
+never runs for anything after the command name. Nothing in the raw remainder is ever offered to
+wildcard processing, and `z_shell_wildcard_finalize()` — the rewrite that would do the damage — only
+runs when a command-name token matched.
+
+Verified with `CONFIG_SHELL_WILDCARD=y` and the sample: `a*b`, `q?z` and `x*y?z` all round-trip
+byte-identical.
+
+**The warning does still apply at `mandatory >= 2`**, where the loop processes a tokenised argument
+before reaching the raw one and can trigger the rewrite. So if your command is
+`config <instance> <message>`, either keep wildcards off or keep `*` and `?` out of the tokenised
+argument.
+
+Thanks to the downstream integration that caught this: the correction came with the source references
+and a reproduction, which is why it is stated as mechanism here rather than as advice.
 
 ## Printing configuration back
 
@@ -238,37 +234,24 @@ To use a descriptor defined in another translation unit, declare it with `PB_TF_
 
 ## Kconfig checklist
 
-Either take the snippet:
-
-```sh
-west build -S nanopb-textformat-shell ...
-```
-
-or set the same things by hand:
-
 ```
 CONFIG_NANOPB=y
 CONFIG_NANOPB_TEXTFORMAT=y
 
-# Wildcard expansion rewrites cmd_buff before the handler sees it, which
-# corrupts a raw text-format argument. See caveat 3.
-CONFIG_SHELL_WILDCARD=n
-
 # The whole command line, not just the message. Default 256. See caveat 2.
-CONFIG_SHELL_CMD_BUFF_SIZE=1024
+CONFIG_SHELL_CMD_BUFF_SIZE=512
 
 # Default 64, sized for a keyboard. A pasted line is silently truncated past
-# that. See caveat 4 -- this is the one that looks like a parse bug.
-CONFIG_SHELL_BACKEND_SERIAL_RX_RING_BUFFER_SIZE=1024
-
-# The printer casts every integer to long long and prints %lld/%llu, so full
-# integral conversion is needed for *all* integer fields, not only 64-bit ones.
-# Both are already Zephyr defaults; the library BUILD_ASSERTs on them rather
-# than printing silently wrong numbers, so you only need these if something in
-# your build changed them.
-CONFIG_CBPRINTF_COMPLETE=y
-CONFIG_CBPRINTF_FULL_INTEGRAL=y
+# that. See caveat 3 -- this is the one that looks like a parse bug.
+CONFIG_SHELL_BACKEND_SERIAL_RX_RING_BUFFER_SIZE=512
 ```
+
+Size the last two for your own longest message; the numbers above suit the sample.
+
+`CONFIG_CBPRINTF_COMPLETE` needs no entry: the module `depends on` it, so Kconfig enforces it.
+`CONFIG_CBPRINTF_FULL_INTEGRAL` is already the Zephyr default, and since v0.3.0 only fields wider
+than 32 bits depend on it -- such a field reports `PB_TF_ERR_UNSUPPORTED` if it is unavailable,
+rather than printing wrong numbers.
 
 `CONFIG_NANOPB_TEXTFORMAT_FLOAT` is `default y` and selects `CBPRINTF_FP_SUPPORT`. Setting it to `n`
 makes float fields report `PB_TF_ERR_NO_FLOAT` in both directions rather than failing the build, and

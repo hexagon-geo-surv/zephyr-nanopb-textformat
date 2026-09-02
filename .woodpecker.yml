@@ -1,0 +1,56 @@
+# Codeberg CI (Woodpecker) for zephyr-nanopb-textformat.
+#
+# Scope, and why: this runs the whole test matrix on native_sim only. That is a
+# deliberate choice, not a shortcut.
+#
+#   - native_sim is the only target that compiles against a *host* libc, at
+#     -std=c17. It catches a class of portability bug the cross targets cannot,
+#     and v0.1.0 shipped exactly one (strnlen, POSIX and not ISO C) that broke
+#     every consumer building for native_sim while the maintainer's own
+#     mps2/an385 and qemu_x86 runs stayed green. That is the gap worth closing
+#     automatically.
+#
+#   - It also needs no Zephyr SDK, only the host toolchain. The official
+#     zephyrprojectrtos/ci image is 7.6 GB; pulling that on every push to cover
+#     targets the maintainer already runs locally (`just test`, 16
+#     configurations x 2 boards) is not a good trade against Codeberg's
+#     resources.
+#
+# So: CI guards the platform a contributor is least likely to have, and `just
+# test` before a release covers the cross targets. The 64-bit qualifier is
+# explicit because plain native_sim is 32-bit and would need gcc-multilib, which
+# does not exist on aarch64 runners.
+#
+# The ~640 MB west fetch is the bulk of each run; --narrow and --depth=1 keep it
+# to that.
+
+when:
+  - event: [push, pull_request, manual]
+
+steps:
+  - name: test
+    image: python:3.12-slim-bookworm
+    environment:
+      DEBIAN_FRONTEND: noninteractive
+      ZEPHYR_TOOLCHAIN_VARIANT: host
+    commands:
+      # Host toolchain and build tools. No cross SDK is needed for native_sim.
+      - apt-get update -qq
+      - >-
+        apt-get install -y -qq --no-install-recommends
+        build-essential cmake ninja-build git device-tree-compiler ca-certificates
+      # west first, so it can fetch the tree the other requirements live in.
+      - pip install --no-cache-dir -q west
+      - west init -l ws/manifest
+      - cd ws && west update --narrow --fetch-opt=--depth=1
+      # Zephyr's own build and twister requirements, plus the nanopb generator's.
+      - >-
+        pip install --no-cache-dir -q
+        -r zephyr/scripts/requirements-base.txt
+        -r zephyr/scripts/requirements-run-test.txt
+        protobuf grpcio-tools junitparser natsort pytest
+      - export ZEPHYR_BASE="$PWD/zephyr"
+      # The full matrix: every scenario in testcase.yaml, built and run.
+      - west twister -T ../tests -p native_sim/native/64 --inline-logs -O twister-out
+      # The sample builds too, so a change that breaks the public API is caught.
+      - west build -p always -b native_sim/native/64 ../samples/textformat

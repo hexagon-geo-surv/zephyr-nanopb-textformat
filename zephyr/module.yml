@@ -2,9 +2,3 @@ name: nanopb_textformat
 build:
   cmake: .
   kconfig: Kconfig
-  settings:
-    # Provides the `nanopb-textformat-shell` snippet, which applies the shell
-    # settings a raw text-format argument needs. Note `settings` must be nested
-    # under `build`, not at the top level (zephyr_module.py reads
-    # meta['build']['settings']).
-    snippet_root: .
