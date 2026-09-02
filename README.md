@@ -5,6 +5,13 @@ Protobuf **text format** for [nanopb][nanopb] messages, as a [Zephyr][zephyr] mo
 Parses a subset of the text format directly into a nanopb-generated struct, and prints such a struct
 back out. No heap, no scratch buffers, no recursion.
 
+> **Experimental: 0.x, and the API can change.**
+>
+> Two of the four releases so far removed something — 0.3.0 deleted the runtime flag arguments,
+> 0.4.0 deleted a Kconfig snippet. Both were minor bumps, which is what semver means by 0.x.
+> **Pin a tag**, and read the release notes before moving it. [Versioning](#versioning) says what is
+> more settled and what is less.
+
 ```
 uart:~$ cfg set delay: 100, threshold: 500
 uart:~$ cfg set tags: [1,2,3], path: [{x: 7, y: 0}, {x: 9, y: 1}]
@@ -394,9 +401,27 @@ forced it.
 
 [Semantic versioning](https://semver.org). The current version is **0.4.0**.
 
-Major is still 0, which means the API may change — the library is complete and tested, but nobody
-outside this repository has used it yet, and the error strings were reworded as recently as the first
-release. Pin a tag.
+**Major is 0, and that is meant literally: the API can change, and has.** Not because the library is
+unfinished — it is feature-complete against its design, with 1722 test cases across 16
+configurations on two boards plus native_sim — but because it is young enough that better shapes keep
+turning up, usually from someone integrating it:
+
+| | |
+|---|---|
+| 0.1.1 | fixed a build failure on `native_sim` that no cross target could catch |
+| 0.3.0 | **removed** the runtime `flags` arguments in favour of Kconfig |
+| 0.4.0 | **removed** a Kconfig snippet, and withdrew advice to disable shell wildcards |
+
+Both removals were minor bumps. That is correct semver for 0.x — a breaking change does not force a
+major bump until 1.0 — but it does mean **`revision: main` will eventually break your build**. Pin a
+tag.
+
+What that instability does *not* extend to: the parsed dialect has never narrowed, and printed output
+has never stopped re-parsing. Those two are contracts from the start
+(see [docs/dialect.md](docs/dialect.md)), and a change to either would be called out loudly. What has
+moved is the shape of the C API and the surrounding Kconfig.
+
+1.0.0 will mean the API has stopped moving. It is not there yet.
 
 `include/nanopb_textformat.h` exposes the version if you need to compile against more than one:
 
@@ -405,7 +430,8 @@ release. Pin a tag.
 ```
 
 Three of this library's contracts are not function signatures, and they are versioned as carefully as
-the API is:
+the API is. The classifications below say what *counts* as a breaking change; while major is 0 such a
+change still ships as a minor bump:
 
 - **The dialect.** Accepting *more* valid text format is a minor bump; accepting *less* is a major
   one, because it breaks messages that used to work. `docs/dialect.md` is the contract.
