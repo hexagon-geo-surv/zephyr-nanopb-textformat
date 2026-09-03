@@ -73,7 +73,7 @@ submessages — but:
   reconstruct.
 
 Supporting names would cost a registration line per enum type plus the strings in flash. If it is
-ever wanted, the shape is a `pb_tf_enum_t` referenced from the row exactly like `sub`, so nothing
+ever wanted, the shape is a `struct pb_tf_enum` referenced from the row exactly like `sub`, so nothing
 here forecloses it.
 
 ### Field shapes

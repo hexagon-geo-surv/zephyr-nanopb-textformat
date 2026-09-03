@@ -36,14 +36,14 @@ are what you will want to vary.
 west build -p always -b qemu_x86 -d build-t ../tests/textformat
 west build -d build-t -t run
 
-# The real gate: 4 configurations x 2 boards. Run this before every commit.
+# The real gate: 9 scenarios, 18 configurations, 2 boards. Before every commit.
 west twister -T ../tests -p mps2/an385 -p qemu_x86 --inline-logs
 
 # And native_sim, which needs a Linux host -- `just test-native` runs it in
 # Docker. Do not skip it: it is the only target that compiles against a *host*
 # libc, and v0.1.0 shipped a bug that no cross target could catch. See below.
 
-# One configuration (core | nofloat | no64 | shallow)
+# One configuration (core | nofloat | no64 | reduced | shallow)
 west twister -T ../tests -p qemu_x86 -s nanopb_textformat.no64
 
 # Locate the scenario containing one ZTEST. Note this runs every sibling test in
@@ -59,7 +59,8 @@ The design rests on measured numbers, and several plan decisions were reversed b
 whenever you touch the frame stacks, the float guards, or add a code path.
 
 ```sh
-# Stack usage. pb_tf_parse and pb_tf_print must each stay a single flat frame.
+# Stack usage. Neither direction may recurse; both are one frame plus a fixed
+# array that grows with MAX_DEPTH. See the measured figures under Architecture.
 west build -p always -b mps2/an385 -d build-su ../tests/textformat \
   -- -DEXTRA_CFLAGS=-fstack-usage
 cat $(find build-su -name 'nanopb_textformat_*.c.su')
@@ -118,8 +119,9 @@ of MISRA C:2025 Rule 17.2.
 
 **Do not reintroduce recursion in either file.** Both now grow linearly with `MAX_DEPTH` instead:
 20 bytes per level for parse and 16 for print, over a fixed frame. Measured at depth 1/8/32 that is
-160/304/792 for `pb_tf_parse` and 144/264/648 for `pb_tf_print` — note print is *not* flat, which an
-earlier version of this file claimed.
+160/304/792 for `pb_tf_parse_into` and 144/256/648 for `pb_tf_print_styled` — note print is *not*
+flat, which an earlier version of this file claimed. `pb_tf_parse`/`pb_tf_merge` add a 16-byte
+forwarding frame, and `pb_tf_print_buf_styled` 32.
 
 The one subtlety recursion handled for free: a repeated submessage's element count must not include
 an element whose body failed halfway through. So the **commit** (`has_` bit, repeated count, or oneof
@@ -152,10 +154,15 @@ declared `max_size`, which tail padding can differ from.
   codec, so a genuine 8-byte field reports `PB_TF_ERR_UNSUPPORTED`. Real narrowing is `int_size`.
 - Shapes the library cannot represent (`POINTER`, `CALLBACK`, `FIXARRAY`, `EXTENSION`) are **runtime**
   errors on parse and **skipped** on print — never build failures. That distinction is the point.
-- **The printer needs `CBPRINTF_COMPLETE` and `CBPRINTF_FULL_INTEGRAL` for every integer**, not just
-  64-bit ones, because `pb_tf_print_int()` casts everything to `long long`. Both are Kconfig *choice*
-  members, so they cannot be `select`ed — `print.c` `BUILD_ASSERT`s on them instead. Reduced integral
-  conversion otherwise builds cleanly and prints wrong numbers.
+- **The printer needs `CBPRINTF_COMPLETE`, and `CBPRINTF_FULL_INTEGRAL` only for fields wider than
+  32 bits.** `CBPRINTF_COMPLETE` is non-negotiable because `CBPRINTF_NANO` has no `%o`, which the
+  three-digit octal escapes need; it is a Kconfig *choice* member and so cannot be `select`ed, hence
+  `NANOPB_TEXTFORMAT_PRINT` `depends on` it. `FULL_INTEGRAL` is narrower than it looks: anything 32
+  bits or less prints through `PRId32`/`PRIu32`, and only a genuine 64-bit field consults
+  `IS_ENABLED(CONFIG_CBPRINTF_FULL_INTEGRAL)` and reports `PB_TF_ERR_UNSUPPORTED` when it is off.
+  Earlier versions of this file claimed both were needed for every integer, that `pb_tf_print_int()`
+  casts everything to `long long`, and that `print.c` `BUILD_ASSERT`s on them. All three were true
+  before 0.3.0 and none are now — there is no `BUILD_ASSERT` in `print.c` at all.
 
 ## The sample
 
@@ -185,8 +192,8 @@ accepts a configuration or only reports one. `common.c` (descriptor lookup, `pb_
 The split is clean because neither half calls the other — keep it that way. `CMakeLists.txt` selects
 the sources with `zephyr_library_sources_ifdef`, and the public header guards the four declarations,
 so calling into a configured-out half is a compile error naming the function rather than a link
-failure. Measured: 4970 B for both, 1653 print-only, 3783 parse-only, and
-`common + half` matches each exactly.
+failure. Measured on mps2/an385: 5116 B for both (common 474, parse 3317, print 1325), 1799
+print-only, 3791 parse-only — so `common + half` matches each exactly.
 
 One consequence worth preserving: **the `CBPRINTF_COMPLETE` requirement belongs to
 `_PRINT`, not to the module.** Only `print.c` touches cbprintf, and the requirement exists because
@@ -209,8 +216,12 @@ configured — keep them meaningful:
 | `nofloat` | `FLOAT=n` degrades cleanly in both directions |
 | `no64` | genuine 8-byte fields degrade cleanly (they do **not** narrow) |
 | `shallow` | `MAX_DEPTH=1` actually reaches `PB_TF_ERR_DEPTH` |
-| `compact`, `braces`, `skipdefaults` | each printed style, since one build prints one way |
 | `reduced` | `CBPRINTF_REDUCED_INTEGRAL` — narrow fields still print, 64-bit ones degrade |
+
+There were once `compact`, `braces` and `skipdefaults` scenarios, one per printed style, because a
+build could only print one way. 0.6.0 put the style in the function name, so one build now asserts
+all four exactly (`test_every_style_exactly`) and those three scenarios were removed. Fewer
+configurations, more coverage — do not restore them.
 
 Note `fx_scalars` carries a field of every ltype, so printing it needs a build that can represent
 all of them. Tests that print it guard on `SCALARS_PRINTABLE`; several used to pass under `nofloat`
@@ -232,7 +243,12 @@ Two further things that target taught, worth keeping in mind:
 - **twister turns warnings into errors**; a plain `west build` only warns. A clean `west build` is not
   evidence.
 - Plain `native_sim` is **32-bit** and needs `gcc-multilib`, which does not exist on aarch64 — an
-  arm64 host can only run `native_sim/native/64`. Both are in `platform_allow`.
+  arm64 host can only run `native_sim/native/64`. Both are in `platform_allow`, and `just
+  test-native` **defaults to the 64-bit qualifier** for this reason. It used to default to plain
+  `native_sim`, so on this machine every scenario died in `arch/posix/aarch64.cmake` before
+  compiling a line — the recipe had never once worked here without an explicit argument. Treat a
+  green *local* native_sim claim with suspicion unless you have seen the pass counts: this is the
+  same shape of failure as the `strnlen` bug, a check that looked like it was running and was not.
 - Running x86 under QEMU on Apple Silicon makes `cc1` segfault intermittently. That is emulation
   noise, not a defect; retry, or use the arm64 path for a stable signal.
 
@@ -304,7 +320,8 @@ function signatures:
 
 **MAJOR**
 
-- Removing, renaming or re-signaturing any of the six public functions or the two macros.
+- Removing, renaming or re-signaturing any of the seven public functions, the eight `static
+  inline` wrappers, or the two macros.
 - Changing the signature or behaviour of `pb_tf_print_styled()` / `pb_tf_print_buf_styled()`. The eight
   style wrappers are `static inline` in the header, so **user** object files call these directly and
   carry the argument order with them — exactly the ABI hazard the struct layouts have below.
