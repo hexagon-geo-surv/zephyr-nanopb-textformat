@@ -28,6 +28,15 @@
 /** Nothing has been emitted in this body yet, so no separator is due. */
 #define PB_TF_PF_FIRST 0x01U
 
+/** This body renders on one line, even though the enclosing style is not. */
+#define PB_TF_PF_INLINE 0x02U
+
+/** A "name: [" is open on this frame and still collecting elements. */
+#define PB_TF_PF_LIST_OPEN 0x04U
+
+/** That open list puts each element on its own line. */
+#define PB_TF_PF_LIST_EXPAND 0x08U
+
 /** One open message body. */
 struct pb_tf_pframe {
 	const struct pb_tf_msg *tf;
@@ -69,6 +78,13 @@ struct pb_tf_printer {
 #define PB_TF_SKIPS_DEFAULTS IS_ENABLED(CONFIG_NANOPB_TEXTFORMAT_PRINT_SKIP_DEFAULTS)
 
 /*
+ * Width below which a submessage or a list stays on one line. Not in
+ * nanopb_textformat_priv.h: that header is shared with the parser, and this
+ * symbol does not exist in a build with the printer configured out.
+ */
+#define PB_TF_FIT_WIDTH CONFIG_NANOPB_TEXTFORMAT_PRINT_FIT_WIDTH
+
+/*
  * ---------------------------------------------------------------------------
  * Output
  *
@@ -97,14 +113,40 @@ static int pb_tf_emit(struct pb_tf_printer *pr, const char *fmt, ...)
 	return (rc < 0) ? -PB_TF_ERR_INTERNAL : 0;
 }
 
+/**
+ * True if the body now open is being written on a single line.
+ *
+ * Either because the caller asked for the compact style, or because this one
+ * body was narrow enough to fold into its parent's line. An inlined body cannot
+ * contain a submessage -- that is what pb_tf_msg_inlines() checks -- so the flag
+ * never has to propagate to a child.
+ */
 static bool pb_tf_compact(const struct pb_tf_printer *pr)
 {
-	return pr->compact;
+	if (pr->compact) {
+		return true;
+	}
+
+	return (pr->stack[pr->top].flags & PB_TF_PF_INLINE) != 0U;
+}
+
+/**
+ * Columns of indentation the current body's fields sit at.
+ *
+ * One extra level while an expanded list is open, since its elements are nested
+ * inside the "name: [" line without a frame of their own.
+ */
+static unsigned int pb_tf_indent_cols(const struct pb_tf_printer *pr)
+{
+	const struct pb_tf_pframe *fr = &pr->stack[pr->top];
+	unsigned int extra = ((fr->flags & PB_TF_PF_LIST_EXPAND) != 0U) ? 1U : 0U;
+
+	return (pr->base + pr->top + extra) * 2U;
 }
 
 static void pb_tf_indent(struct pb_tf_printer *pr)
 {
-	unsigned int n = (pr->base + pr->top) * 2U;
+	unsigned int n = pb_tf_indent_cols(pr);
 	unsigned int i;
 
 	for (i = 0U; i < n; i++) {
@@ -138,6 +180,31 @@ static void pb_tf_field_suffix(struct pb_tf_printer *pr)
 	if (!pb_tf_compact(pr)) {
 		pb_tf_put(pr, '\n');
 	}
+}
+
+/**
+ * Emit whatever must follow the occurrence just written.
+ *
+ * Inside an open list that is a separator, and only if another element follows:
+ * pb_tf_advance() has already run, so a non-zero elem means the run continues.
+ * The closing ']' is not emitted here but by pb_tf_run_print(), because the last
+ * element of a message list finishes in the pop branch rather than here.
+ */
+static void pb_tf_occ_end(struct pb_tf_printer *pr, struct pb_tf_pframe *fr)
+{
+	if ((fr->flags & PB_TF_PF_LIST_OPEN) != 0U) {
+		if (fr->elem != 0U) {
+			pb_tf_put(pr, ',');
+			if ((fr->flags & PB_TF_PF_LIST_EXPAND) != 0U) {
+				pb_tf_put(pr, '\n');
+			} else {
+				pb_tf_put(pr, ' ');
+			}
+		}
+		return;
+	}
+
+	pb_tf_field_suffix(pr);
 }
 
 /*
@@ -505,6 +572,235 @@ static void pb_tf_advance(struct pb_tf_pframe *fr, const struct pb_tf_field *row
 	fr->elem = 0U;
 }
 
+/*
+ * ---------------------------------------------------------------------------
+ * Fit-or-expand
+ *
+ * The multi-line styles keep a submessage or a list on one line when it is
+ * narrow enough to read there. Deciding that needs the width the node *would*
+ * have, which means rendering it twice -- so the measuring pass must cost
+ * nothing structural.
+ *
+ * It costs nothing because of one rule: a body whose descriptor contains a
+ * submessage row always expands, whatever its width. So anything ever measured
+ * is a leaf, the measuring pass is a flat loop over one row table, and there is
+ * no second frame stack and no recursion. The printer's own sink is borrowed
+ * and put back rather than building a second struct pb_tf_printer, which would
+ * carry another stack[PB_TF_MAX_DEPTH + 1] -- 144 bytes at the default depth.
+ * That is safe because pb_tf_print_scalar() reads only out/ctx: no frame, no
+ * style, no printer state of its own.
+ * ---------------------------------------------------------------------------
+ */
+
+/** A sink that counts bytes and keeps none of them. */
+struct pb_tf_ctr {
+	size_t used;
+};
+
+static int pb_tf_out_ctr(int c, void *ctx)
+{
+	struct pb_tf_ctr *ctr = ctx;
+
+	ctr->used++;
+
+	return c;
+}
+
+/**
+ * True if @p tf declares a field that is itself a message.
+ *
+ * A property of the descriptor, not of the value: a message whose only
+ * submessage field happens to be unset still expands. Reading the value would
+ * mean descending to find out how wide the nested part is, which is exactly the
+ * recursion this design does not have. Unrepresentable shapes do not count,
+ * since the printer skips them rather than emitting them.
+ */
+static bool pb_tf_has_msg_row(const struct pb_tf_msg *tf)
+{
+	uint16_t i;
+
+	for (i = 0U; i < tf->count; i++) {
+		const struct pb_tf_field *row = &tf->fields[i];
+
+		if (pb_tf_shape_supported(row) && pb_tf_vtype_is_msg(row->vtype)) {
+			return true;
+		}
+	}
+
+	return false;
+}
+
+/**
+ * Compact width of rows [@p first, @p last) of one message body.
+ *
+ * Serves both questions the fit rule asks. Whether a whole body folds is the
+ * full row range; whether one repeated row's bracket list folds is a range of
+ * one, which comes out as "name: [a, b]" because a repeated row is framed that
+ * way here exactly as it is in pb_tf_run_print().
+ *
+ * Everything is counted through the sink rather than added up by hand, so the
+ * measurement cannot drift from what the printer emits -- which matters most for
+ * floating point, whose width comes from cbprintf and not from any rule this
+ * file could restate.
+ *
+ * @return the width, or SIZE_MAX if some field in the range cannot be printed
+ *         at all. The caller then expands, and the real pass reports the error.
+ */
+static size_t pb_tf_measure(struct pb_tf_printer *pr, const struct pb_tf_msg *tf, const void *msg,
+			    uint16_t first, uint16_t last)
+{
+	struct pb_tf_pframe scratch;
+	struct pb_tf_ctr ctr;
+	cbprintf_cb save_out = pr->out;
+	void *save_ctx = pr->ctx;
+	bool leading = true;
+	bool bad = false;
+	uint16_t i;
+
+	ctr.used = 0U;
+	pr->out = pb_tf_out_ctr;
+	pr->ctx = &ctr;
+
+	scratch.tf = tf;
+	scratch.msg = msg;
+	scratch.index = 0U;
+	scratch.elem = 0U;
+	scratch.flags = 0U;
+
+	for (i = first; (i < last) && !bad; i++) {
+		const struct pb_tf_field *row = &tf->fields[i];
+		bool repeated = (PB_TF_HT(row->rules) == PB_TF_HT_REPEATED);
+		bool opened = false;
+		pb_size_t elem = 0U;
+
+		if (!pb_tf_shape_supported(row)) {
+			continue;
+		}
+
+		while (!bad) {
+			const void *src;
+			pb_size_t data_size = 0U;
+			pb_size_t count = 1U;
+
+			if (pb_tf_locate(&scratch, row, elem, &src, &data_size, &count) != 0) {
+				bad = true;
+				break;
+			}
+			if ((src == NULL) || pb_tf_skip_default(pr, row, data_size, src)) {
+				break;
+			}
+			if (pb_tf_vtype_is_msg(row->vtype)) {
+				/* Never asked for: the caller scanned the rows. */
+				bad = true;
+				break;
+			}
+
+			if (opened) {
+				(void)pb_tf_emit(pr, ", ");
+			} else {
+				if (!leading) {
+					(void)pb_tf_emit(pr, ", ");
+				}
+				leading = false;
+				(void)pb_tf_emit(pr, repeated ? "%s: [" : "%s: ", row->name);
+				opened = true;
+			}
+
+			if (pb_tf_print_scalar(pr, row, data_size, src) != 0) {
+				bad = true;
+				break;
+			}
+
+			if (!repeated) {
+				break;
+			}
+
+			elem++;
+			if (elem >= count) {
+				break;
+			}
+		}
+
+		if (opened && repeated) {
+			pb_tf_put(pr, ']');
+		}
+	}
+
+	pr->out = save_out;
+	pr->ctx = save_ctx;
+
+	return bad ? SIZE_MAX : ctr.used;
+}
+
+/**
+ * True if @p width more columns fit on the line now being written.
+ *
+ * The indentation already spent counts against the budget, so the same message
+ * breaks apart once it sits deep enough -- which is the point, the limit being a
+ * line width and not a message size. PB_TF_FIT_WIDTH of 0 never fits, and is the
+ * documented way to ask for one field per line.
+ */
+static bool pb_tf_fits(const struct pb_tf_printer *pr, size_t width)
+{
+	size_t cols = (size_t)pb_tf_indent_cols(pr);
+
+	if (width == SIZE_MAX) {
+		return false;
+	}
+
+	return (cols + width) <= (size_t)PB_TF_FIT_WIDTH;
+}
+
+/**
+ * True if this submessage occurrence is to be written on one line.
+ *
+ * @p frame is what the occurrence costs around its body: the name, " {" and "}"
+ * for a named field, or just the braces for an unnamed element of a list.
+ */
+static bool pb_tf_msg_inlines(struct pb_tf_printer *pr, const struct pb_tf_msg *sub,
+			      const void *src, size_t frame)
+{
+	size_t width;
+
+	if (pb_tf_compact(pr)) {
+		return true;
+	}
+
+	if (pb_tf_has_msg_row(sub)) {
+		return false;
+	}
+
+	width = pb_tf_measure(pr, sub, src, 0U, sub->count);
+	if (width == SIZE_MAX) {
+		return false;
+	}
+
+	return pb_tf_fits(pr, frame + width);
+}
+
+/** True if an opening list is to put each element on its own line. */
+static bool pb_tf_list_expands(struct pb_tf_printer *pr, const struct pb_tf_pframe *fr,
+			       const struct pb_tf_field *row)
+{
+	if (pb_tf_compact(pr)) {
+		return false;
+	}
+
+	if (pb_tf_vtype_is_msg(row->vtype)) {
+		/*
+		 * Elements are messages, so the same rule as a named submessage
+		 * applies to the list: it always breaks. Which element you are
+		 * reading is then visible rather than merely countable.
+		 */
+		return true;
+	}
+
+	/* A range of one row, which frames itself as "name: [...]". */
+	return !pb_tf_fits(pr,
+			   pb_tf_measure(pr, fr->tf, fr->msg, fr->index,
+					 (uint16_t)(fr->index + 1U)));
+}
+
 static int pb_tf_run_print(struct pb_tf_printer *pr)
 {
 	while (true) {
@@ -513,21 +809,58 @@ static int pb_tf_run_print(struct pb_tf_printer *pr)
 		const void *src;
 		pb_size_t data_size = 0U;
 		pb_size_t count = 1U;
+		bool repeated;
 		int err;
 
+		/*
+		 * An open list whose run has ended. elem is only zero again once
+		 * pb_tf_advance() has moved past the last element, and the skip
+		 * paths below cannot fire mid-list -- pb_tf_locate() yields a
+		 * source for every elem below count, and pb_tf_skip_default()
+		 * never applies to a repeated row -- so this is an exact test.
+		 */
+		if (((fr->flags & PB_TF_PF_LIST_OPEN) != 0U) && (fr->elem == 0U)) {
+			bool expand = (fr->flags & PB_TF_PF_LIST_EXPAND) != 0U;
+
+			/* Cleared first, so the ']' indents to the field, not the
+			 * elements.
+			 */
+			fr->flags &= (uint8_t)~(PB_TF_PF_LIST_OPEN | PB_TF_PF_LIST_EXPAND);
+
+			if (expand) {
+				pb_tf_put(pr, '\n');
+				pb_tf_indent(pr);
+			}
+			pb_tf_put(pr, ']');
+			pb_tf_field_suffix(pr);
+			continue;
+		}
+
 		if (fr->index >= fr->tf->count) {
+			bool inl;
+
 			if (pr->top == 0U) {
 				return 0;
 			}
 
-			/* Close this body; the parent's cursor already moved on. */
+			/*
+			 * Close this body; the parent's cursor already moved on.
+			 * Whether the body was inlined is the child's property, and
+			 * pb_tf_compact() reads the parent once top has been
+			 * decremented -- so read it while the child is still
+			 * current.
+			 */
+			inl = (fr->flags & PB_TF_PF_INLINE) != 0U;
+
 			pr->top--;
-			if (!pb_tf_compact(pr)) {
+			fr = &pr->stack[pr->top];
+
+			/* Compact stays tight and symmetric: "origin {x: 1, y: 2}". */
+			if (!pr->compact && !inl) {
 				pb_tf_indent(pr);
 			}
-			/* Compact stays tight and symmetric: "origin {x: 1, y: 2}". */
 			pb_tf_put(pr, '}');
-			pb_tf_field_suffix(pr);
+			pb_tf_occ_end(pr, fr);
 			continue;
 		}
 
@@ -557,6 +890,7 @@ static int pb_tf_run_print(struct pb_tf_printer *pr)
 			continue;
 		}
 
+		/* Checked before anything is emitted, so a refusal emits nothing. */
 		if (pb_tf_vtype_is_msg(row->vtype)) {
 			if (row->sub == NULL) {
 				return -PB_TF_ERR_INTERNAL;
@@ -564,13 +898,57 @@ static int pb_tf_run_print(struct pb_tf_printer *pr)
 			if (pr->top >= (unsigned int)PB_TF_MAX_DEPTH) {
 				return -PB_TF_ERR_DEPTH;
 			}
+		}
+
+		repeated = (PB_TF_HT(row->rules) == PB_TF_HT_REPEATED);
+
+		/*
+		 * A repeated field is one bracket list, not one field per element:
+		 * "tags: [1, 2]" rather than "tags: 1 tags: 2". Both are valid
+		 * text format and both re-parse, but the list groups the elements
+		 * and does not repeat the name, so which element you are reading
+		 * is visible. The walk itself is unchanged -- each element still
+		 * re-enters this loop through fr->elem -- only the framing is new.
+		 */
+		if (repeated && ((fr->flags & PB_TF_PF_LIST_OPEN) == 0U)) {
+			bool expand = pb_tf_list_expands(pr, fr, row);
 
 			pb_tf_field_prefix(pr, fr);
-			err = pb_tf_emit(pr, "%s {", row->name);
+			err = pb_tf_emit(pr, "%s: [", row->name);
 			if (err != 0) {
 				return err;
 			}
-			if (!pb_tf_compact(pr)) {
+
+			fr->flags |= PB_TF_PF_LIST_OPEN;
+			if (expand) {
+				fr->flags |= PB_TF_PF_LIST_EXPAND;
+				pb_tf_put(pr, '\n');
+			}
+		}
+
+		/* An element of an expanded list sits on a line of its own. */
+		if (repeated && ((fr->flags & PB_TF_PF_LIST_EXPAND) != 0U)) {
+			pb_tf_indent(pr);
+		}
+
+		if (pb_tf_vtype_is_msg(row->vtype)) {
+			bool inl;
+
+			if (repeated) {
+				/* List elements carry no name: "rep: [{a: 1}]". */
+				inl = pb_tf_msg_inlines(pr, row->sub, src, 2U);
+				pb_tf_put(pr, '{');
+			} else {
+				inl = pb_tf_msg_inlines(pr, row->sub, src,
+							strlen(row->name) + 3U);
+				pb_tf_field_prefix(pr, fr);
+				err = pb_tf_emit(pr, "%s {", row->name);
+				if (err != 0) {
+					return err;
+				}
+			}
+
+			if (!pr->compact && !inl) {
 				pb_tf_put(pr, '\n');
 			}
 
@@ -583,13 +961,18 @@ static int pb_tf_run_print(struct pb_tf_printer *pr)
 			pr->stack[pr->top].index = 0U;
 			pr->stack[pr->top].elem = 0U;
 			pr->stack[pr->top].flags = PB_TF_PF_FIRST;
+			if (inl) {
+				pr->stack[pr->top].flags |= PB_TF_PF_INLINE;
+			}
 			continue;
 		}
 
-		pb_tf_field_prefix(pr, fr);
-		err = pb_tf_emit(pr, "%s: ", row->name);
-		if (err != 0) {
-			return err;
+		if (!repeated) {
+			pb_tf_field_prefix(pr, fr);
+			err = pb_tf_emit(pr, "%s: ", row->name);
+			if (err != 0) {
+				return err;
+			}
 		}
 
 		err = pb_tf_print_scalar(pr, row, data_size, src);
@@ -597,8 +980,11 @@ static int pb_tf_run_print(struct pb_tf_printer *pr)
 			return err;
 		}
 
-		pb_tf_field_suffix(pr);
+		/* Advance first: pb_tf_occ_end() reads the cursor to tell whether
+		 * another element follows.
+		 */
 		pb_tf_advance(fr, row, count);
+		pb_tf_occ_end(pr, fr);
 	}
 }
 

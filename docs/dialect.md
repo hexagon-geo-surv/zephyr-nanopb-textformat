@@ -106,6 +106,51 @@ On **output** braces are chosen by which function you call — `pb_tf_print_buf_
 `pb_tf_print_buf_compact_braces()` emits them — so the brace-free forms produce valid standalone text
 format that `protoc` will parse as-is.
 
+## What it prints
+
+Printed output is a further subset of what is accepted, and these are the shapes it commits to. All
+of them are in the table above, so anything printed also re-parses here.
+
+- A **repeated field is one bracket list**, `tags: [1, 2]`, never one entry per element. Both
+  spellings are valid and both re-parse, but the list does not repeat the field name, so which
+  element you are reading is visible rather than merely countable — and the line is shorter. A
+  repeated field with no elements prints **nothing at all**, not `tags: []`.
+- A **submessage** is `name {…}`, always with the space and never with the optional colon.
+- **Strings and bytes** are escaped as described under [Output escaping](#output-escaping).
+- **Enums print as numbers**, since nanopb keeps no value names.
+
+### Line shape
+
+`pb_tf_print_compact()` and friends put everything on one line. The multi-line forms print one field
+per line at two spaces per level, except that a submessage or a list **folds onto one line when it
+fits** within `CONFIG_NANOPB_TEXTFORMAT_PRINT_FIT_WIDTH` columns, indentation included:
+
+```
+plain_scalar: 1
+rep_scalar: [3, 4]
+sing_msg {a: 5, b: -6}
+rep_msg: [
+  {a: 9, b: 1},
+  {a: 10, b: 2}
+]
+deep {
+  d2 {
+    d3 {v: 11}
+  }
+}
+```
+
+Two cases do not consult the width, so that deciding never needs to look inside a nested value:
+
+- A submessage whose **type declares a submessage field** always breaks, however narrow the value
+  is. It is a property of the `.proto`, not of the value, so a message whose submessage field is
+  unset breaks too — `deep` above, and `d2`, for that reason; `d3` declares only a scalar and folds.
+- A repeated field **of submessages** always puts one element per line.
+
+`FIT_WIDTH=0` therefore means strictly one field per line. None of this changes what is accepted, and
+none of it is promised to be stable: the widths at which a given message folds may change between
+releases, while the *set* of shapes above will not.
+
 ## Semantics worth knowing
 
 ### Presence and repetition

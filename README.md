@@ -145,7 +145,7 @@ cfg set origin { x: -3, y: 4 }                the colon is optional before brace
 cfg set name: "hello world"                   quote the value, not the argument
 
 cfg merge tags: [3]                           keep what is there; repeated fields append
-cfg get                                       one field per line
+cfg get                                       readable: one field per line, narrow ones folded
 cfg get compact                               a single line, valid standalone text format
 cfg get set                                   the same, as a pasteable `cfg set` line
 cfg get brief                                 omit implicit-presence zeros
@@ -202,6 +202,36 @@ functions do. The enumerators are positive, so a caller compares against `-PB_TF
 says what it produces, and one firmware can use more than one shape — multi-line for a person reading
 a configuration, compact for a line it means to paste back in or log. There is deliberately no
 style-agnostic `pb_tf_print()`: its output would depend on a setting the reader has to go and look up.
+
+The multi-line forms are **fit-or-expand**: one field per line, except that a submessage or a
+repeated field folds onto a single line when it fits within
+`CONFIG_NANOPB_TEXTFORMAT_PRINT_FIT_WIDTH` columns, indentation included.
+
+```
+plain_scalar: 1
+rep_scalar: [3, 4]
+sing_msg {a: 5, b: -6}
+rep_msg: [
+  {a: 9, b: 1},
+  {a: 10, b: 2}
+]
+deep {
+  d2 {
+    d3 {v: 11}
+  }
+}
+```
+
+A submessage whose *type* declares a submessage field always breaks, however narrow the value is —
+which is why `deep` and `d2` expand while `d3` folds. That rule is what makes the measuring pass
+free: anything ever measured is a leaf, so it is a flat loop over one row table with no recursion and
+no second frame stack. A repeated field of submessages always puts one element per line, for the same
+reason. Set `FIT_WIDTH=0` for strictly one field per line.
+
+Repeated fields print as **one bracket list**, `tags: [1, 2]`, rather than once per element. Both are
+valid text format and both re-parse, but the list does not repeat the field name, so which element
+you are reading is visible instead of merely countable. [`docs/dialect.md`](docs/dialect.md) states
+exactly what is printed.
 
 The eight named forms are `static inline` wrappers in the header over `pb_tf_print_styled()` and
 `pb_tf_print_buf_styled()`, so they generate no function of their own — the call site materialises
@@ -260,10 +290,10 @@ All figures measured on `mps2/an385` (Cortex-M3) at `-Os`, reproducible with `ju
 
 | | |
 |---|---|
-| Library code | **5116 B** — common 474, parse 3317, print 1325 |
-| print only (`PARSE=n`) | **1799 B** — drops 65% |
-| parse only (`PRINT=n`) | **3791 B** — drops 26% |
-| with `FLOAT=n` | about 570 B less again |
+| Library code | **6173 B** — common 474, parse 3317, print 2382 |
+| print only (`PARSE=n`) | **2856 B** — drops 54% |
+| parse only (`PRINT=n`) | **3791 B** — drops 39% |
+| with `FLOAT=n` | about 580 B less again — parse 2798, print 2323 |
 | Per message descriptor | `12 × (fields + 1) + 12` bytes, plus the field names as strings |
 
 Either direction can be left out with `CONFIG_NANOPB_TEXTFORMAT_PARSE=n` or `_PRINT=n`. They are
@@ -302,13 +332,20 @@ and 16 for the printer, on top of a fixed frame. Measured:
 
 | `MAX_DEPTH` | parsing | printing |
 |---|---|---|
-| 1 | 160 B | 144 B |
-| **8 (default)** | **304 B** | **256 B** |
-| 32 (maximum) | 792 B | 648 B |
+| 1 | 160 B | 136 B |
+| **8 (default)** | **304 B** | **248 B** |
+| 32 (maximum) | 792 B | 632 B |
 
-Add ~60 B for the deepest leaf helper. Budget **about 400 bytes** for a call into the library at the
-default depth, and see [Tips](#tips) for what that means for your thread stacks — usually your own
-output buffer matters more than the library does.
+Those are the entry frames. Add the deepest helper chain above them: ~60 B for the parser, and 232 B
+for the printer, which is the fit-or-expand measuring pass — `pb_tf_msg_inlines()` 48 B calling
+`pb_tf_measure()` 120 B calling `pb_tf_locate()` 64 B. `pb_tf_measure()` is **flat at 120 B
+whatever `MAX_DEPTH` is**, which is the measurable form of the claim that measuring a node needs no
+second frame stack: it only ever walks a leaf body. The buffered entry points add a 32 B forwarding
+frame, and `pb_tf_parse()` / `pb_tf_merge()` 16 B.
+
+Budget **about 400 bytes** for a parse and **about 520** for a print at the default depth, and see
+[Tips](#tips) for what that means for your thread stacks — usually your own output buffer matters
+more than the library does.
 
 Being iterative is not a micro-optimisation. A recursive implementation measured **144 bytes per
 nesting level**: ~1.2 KB at the default depth and ~4.6 KB at the Kconfig maximum, against a
@@ -323,8 +360,8 @@ The sample — Zephyr, the shell, nanopb and this library — on `mps2/an385`:
 
 | | Flash | RAM |
 |---|---|---|
-| `FLOAT=y` (default) | 58 876 B | 12 166 B |
-| `FLOAT=n` | 50 692 B | 12 166 B |
+| `FLOAT=y` (default) | 59 684 B | 12 166 B |
+| `FLOAT=n` | 51 484 B | 12 166 B |
 
 Turning floats off saved 8.0 KB of flash here and **no RAM**, because what it removes is `strtod()`
 and cbprintf's floating-point formatting. Expect somewhere between 8 and 12 KB depending on how much
@@ -336,7 +373,7 @@ you save less.
 **Do I need to change any stack sizes?** Usually yes, and usually not because of this library.
 
 Zephyr's defaults are `CONFIG_MAIN_STACK_SIZE=1024` and `CONFIG_SHELL_STACK_SIZE=2048`. The library
-wants ~400 bytes of that, which is comfortable. What is not comfortable is a printing buffer next to
+wants ~520 bytes of that, which is comfortable. What is not comfortable is a printing buffer next to
 it: `samples/textformat/` originally held a `Config` plus a 192-byte output buffer and called
 `printk`, and that overflowed the 1024-byte main stack outright.
 
@@ -344,7 +381,7 @@ A budget that works:
 
 | | |
 |---|---|
-| Library call | ~400 B at the default depth |
+| Library call | ~400 B parsing, ~520 B printing, at the default depth |
 | Your output buffer | `sizeof(buf)`, if it is a local |
 | `printk` / `shell_print` formatting | several hundred bytes |
 | Head-room | the rest |
@@ -391,8 +428,9 @@ that guide used to recommend and no longer does.
 | `NANOPB_TEXTFORMAT_FLOAT` | `y` | Float and double support. `depends on !MINIMAL_LIBC` (needs `strtod`) and selects `CBPRINTF_FP_SUPPORT`. `n` makes float fields report `PB_TF_ERR_NO_FLOAT` in both directions and saves 8–12 KB of flash, depending on what else in the image formats floats |
 | `NANOPB_TEXTFORMAT_MAX_DEPTH` | `8` | Submessage nesting limit, range 1–32. Costs 20 bytes of stack per level |
 | `NANOPB_TEXTFORMAT_PRINT_SKIP_DEFAULTS` | `n` | Omit implicit-presence fields that are still zero |
+| `NANOPB_TEXTFORMAT_PRINT_FIT_WIDTH` | `64` | Columns below which the multi-line styles fold a submessage or list onto one line, indentation included. Range 0–255; `0` means strictly one field per line |
 | `NANOPB_TEXTFORMAT_PARSE` | `y` | Build the two parsing functions. `n` drops 3317 B |
-| `NANOPB_TEXTFORMAT_PRINT` | `y` | Build the printer. `n` drops 1325 B |
+| `NANOPB_TEXTFORMAT_PRINT` | `y` | Build the printer. `n` drops 2382 B |
 
 ### cbprintf
 
@@ -465,11 +503,11 @@ forced it.
 
 ## Versioning
 
-[Semantic versioning](https://semver.org). The current version is **0.7.0**.
+[Semantic versioning](https://semver.org). The current version is **0.8.0**.
 
 **Major is 0, and that is meant literally: the API can change, and has.** Not because the library is
-unfinished — it is feature-complete against its design, with 1104 test cases across 18
-configurations on two boards, plus 552 more on native_sim under glibc — but because it is young
+unfinished — it is feature-complete against its design, with 1152 test cases across 18
+configurations on two boards, plus 576 more on native_sim under glibc — but because it is young
 enough that better shapes keep
 turning up, usually from someone integrating it:
 
@@ -481,6 +519,7 @@ turning up, usually from someone integrating it:
 | 0.5.0 | added `PARSE` / `PRINT`, so either half can be left out (both still default `y`) |
 | 0.6.0 | **replaced** the print functions with eight style-named ones, **removed** the `_t` typedefs, and switched to `int` returns |
 | 0.7.0 | added `pb_tf_print_styled()` / `pb_tf_print_buf_styled()` for a run-time style choice; the eight named forms became `static inline` wrappers over them |
+| 0.8.0 | **changed printed output**: repeated fields fold into bracket lists, and the multi-line styles became fit-or-expand. No signature moved |
 
 Both removals were minor bumps. That is correct semver for 0.x — a breaking change does not force a
 major bump until 1.0 — but it does mean **`revision: main` will eventually break your build**. Pin a

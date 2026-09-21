@@ -91,6 +91,34 @@ config NANOPB_TEXTFORMAT_PRINT_SKIP_DEFAULTS
 	  field that was explicitly set to zero -- presence is tracked
 	  separately -- nor an empty repeated field, which has nothing to print.
 
+config NANOPB_TEXTFORMAT_PRINT_FIT_WIDTH
+	int "Line width below which a submessage or list stays on one line"
+	depends on NANOPB_TEXTFORMAT_PRINT
+	default 64
+	range 0 255
+	help
+	  Applies to the multi-line styles only; compact is always one line.
+
+	  A submessage or a repeated field prints on one line when it fits
+	  within this many columns, and one entry per line when it does not --
+	  so "origin {x: 1, y: 2}" stays put while a wide record breaks apart.
+	  The indentation already spent counts against the width, because the
+	  limit describes a line and not a message: the same submessage folds
+	  at the top level and breaks several levels down.
+
+	  Two things it does not decide. A submessage whose own type declares
+	  a submessage field always breaks, however narrow the value happens
+	  to be -- that is what keeps the measuring pass flat, with no
+	  recursion and no second frame stack, and it is a property of the
+	  .proto rather than of the value, so a message with an unset
+	  submessage field breaks too. A repeated field of submessages always
+	  puts one element per line, for the same reason.
+
+	  0 means nothing ever fits, i.e. strictly one field per line.
+
+	  64 leaves room under an 80-column terminal for an inlined field to
+	  stay clear of the wrap point at a few levels of nesting.
+
 config NANOPB_TEXTFORMAT_MAX_DEPTH
 	int "Maximum submessage nesting depth"
 	default 8

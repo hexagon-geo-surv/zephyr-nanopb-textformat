@@ -41,6 +41,21 @@ message fx_deep1 {
   fx_deep2 d2 = 1;
 }
 
+// A leaf whose printed width is set by the caller, so a test can sit either
+// side of NANOPB_TEXTFORMAT_PRINT_FIT_WIDTH without depending on its value.
+// Leaf on purpose: a type declaring a submessage field always expands.
+message fx_wide {
+  uint32 n = 1;
+  string pad = 2;
+}
+
+// fx_wide behind a field, so the fit decision is made about a submessage
+// occurrence rather than about the outermost body (which is always one field
+// per line).
+message fx_fit {
+  fx_wide leaf = 1;
+}
+
 // One field per nanopb ltype, all STATIC SINGULAR.
 message fx_scalars {
   int32 f_int32 = 1;
@@ -77,6 +92,11 @@ message fx_shapes {
   repeated fx_inner rep_msg = 6;
   repeated string rep_string = 7;
   repeated uint32 fixed_scalar = 8;
+  // The only repeated shape whose element stride is a padded struct: nanopb
+  // emits PB_BYTES_ARRAY_T(n)[], so locating element k has to use nanopb's own
+  // data_size rather than the declared max_size, which tail padding differs
+  // from. Untested in either direction before 0.8.0.
+  repeated bytes rep_bytes = 12;
 
   oneof choice {
     uint32 c_num = 9;

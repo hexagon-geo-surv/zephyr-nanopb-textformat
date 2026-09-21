@@ -119,13 +119,67 @@ of MISRA C:2025 Rule 17.2.
 
 **Do not reintroduce recursion in either file.** Both now grow linearly with `MAX_DEPTH` instead:
 20 bytes per level for parse and 16 for print, over a fixed frame. Measured at depth 1/8/32 that is
-160/304/792 for `pb_tf_parse_into` and 144/256/648 for `pb_tf_print_styled` — note print is *not*
+160/304/792 for `pb_tf_parse_into` and 136/248/632 for `pb_tf_print_styled` — note print is *not*
 flat, which an earlier version of this file claimed. `pb_tf_parse`/`pb_tf_merge` add a 16-byte
 forwarding frame, and `pb_tf_print_buf_styled` 32.
+
+Those are entry frames only. Since 0.8.0 the printer's deepest helper chain is the fit-or-expand
+measurement — `pb_tf_msg_inlines` 48 + `pb_tf_measure` 120 + `pb_tf_locate` 64 = 232 B on top — so a
+print at the default depth peaks near 480 B rather than 320. `pb_tf_measure` is **flat at 120 B at
+every `MAX_DEPTH`**, which is the measurable form of "measuring needs no second frame stack"; if that
+number ever starts moving with depth, someone has reintroduced a descent into it.
 
 The one subtlety recursion handled for free: a repeated submessage's element count must not include
 an element whose body failed halfway through. So the **commit** (`has_` bit, repeated count, or oneof
 `which_`) is deferred and carried on the *child* frame, applied when its closing brace is consumed.
+
+The printer's frame carries three more flags past `PB_TF_PF_FIRST`, all inside the same spare
+`uint8_t`, so **the frame did not grow** when 0.8.0 added bracket lists and fit-or-expand:
+
+- `PB_TF_PF_INLINE` — this body renders on one line inside a multi-line parent. `pb_tf_compact()`
+  ORs it in, so the whole body goes compact without a second code path. It never needs propagating,
+  because a body that inlines has no submessage rows by construction (see below).
+- `PB_TF_PF_LIST_OPEN` / `PB_TF_PF_LIST_EXPAND` — a `name: [` is open on this frame, and whether its
+  elements get a line each.
+
+**The list is closed by a deferred check at the top of the loop**, not where the last element is
+emitted — because the last element of a *message* list finishes in the pop branch, not in the scalar
+path. The test is `LIST_OPEN && fr->elem == 0`, and it is exact rather than approximate:
+`pb_tf_advance()` is the only thing that resets `elem`, and only past the last element, while the
+two skip paths cannot fire mid-list (`pb_tf_locate()` yields a source for every `elem < count`, and
+`pb_tf_skip_default()` returns false for `PB_TF_HT_REPEATED`). A repeated field with `count == 0`
+never opens a list at all, which is why it still prints nothing rather than `[]`.
+
+Two ordering traps in the pop branch, both live:
+
+- `pb_tf_compact()` reads `pr->stack[pr->top]`, so after `pr->top--` it reads the **parent**. Whether
+  the body was inlined is the *child's* property and must be read before the decrement. Getting this
+  wrong indents a folded closing brace.
+- the epilogue is `pb_tf_occ_end()`, not `pb_tf_field_suffix()`: inside an open list an occurrence is
+  followed by a separator, and only when another element follows. It therefore has to run *after*
+  `pb_tf_advance()`, which is the reverse of the pre-0.8.0 order in the scalar path.
+
+### Measuring a node costs no stack
+
+Fit-or-expand needs the width a node *would* have, so it renders twice. That is free because of one
+rule: **a body whose descriptor declares a submessage row always expands, whatever its width.** So
+anything ever measured is a leaf, and the measuring pass is a flat loop over one row table — no
+recursion, no second frame stack.
+
+Two things to keep that way:
+
+- Do **not** build a second `struct pb_tf_printer` to measure into. It carries
+  `stack[PB_TF_MAX_DEPTH + 1]`, 144 bytes at the default depth. Swap `pr->out`/`pr->ctx` to a
+  counting sink and put them back; that is safe precisely because `pb_tf_print_scalar()` reads only
+  those two members — no frame, no style, no state of its own.
+- Count everything **through the sink**, never by adding up `strlen`s. Float width comes from
+  `cbvprintf` and no rule in this file could restate it, so a hand-summed measurement would drift
+  from what gets printed. `pb_tf_out_buf()` with `size == 0` is *not* usable as a counter: it
+  early-returns without counting.
+
+`pb_tf_has_msg_row()` is a **descriptor** scan, not a value scan. A message whose submessage field
+happens to be unset therefore still expands. That is the price of the rule above, and
+`test_expands_on_descriptor_not_value` pins it so nobody "fixes" it into a recursive lookahead.
 
 ### Values are written straight into the destination
 
@@ -137,6 +191,16 @@ declared `max_size`, which tail padding can differ from.
 
 ## Invariants that fail silently if broken
 
+- **A repeated field prints as one bracket list**, `tags: [1, 2]`, never once per element, and an
+  empty one prints nothing rather than `tags: []`. Both spellings re-parse, so this is a readability
+  and line-length choice, not a correctness one — but it is a documented output contract in
+  `docs/dialect.md` and two tests pin it (`test_repeated_prints_as_list`,
+  `test_empty_repeated_prints_nothing`).
+- **Everything printed must still parse under `protoc`**, not just under this library. Bracket lists
+  and folded leaves were checked against `google.protobuf.text_format.Parse()` before 0.8.0 shipped,
+  reprinting through protoc's own printer and reparsing to prove the message survives. Re-run that
+  if you change what is emitted; a `protoc --descriptor_set_out` plus `descriptor_pool` avoids the
+  gencode/runtime version trap that generated `_pb2.py` walks into.
 - **Output escapes must be three-digit octal**, never `\xHH`. `\x0` followed by `a` reads back as the
   single byte `0x0A`, so a hex escape is ambiguous whenever the next byte is a hex digit. This also
   keeps output pure ASCII, so UTF-8 payloads round-trip with no encoding logic.
@@ -218,6 +282,10 @@ configured — keep them meaningful:
 | `shallow` | `MAX_DEPTH=1` actually reaches `PB_TF_ERR_DEPTH` |
 | `reduced` | `CBPRINTF_REDUCED_INTEGRAL` — narrow fields still print, 64-bit ones degrade |
 
+No scenario varies `PRINT_FIT_WIDTH`, deliberately: both the fold and the expand branch are reachable
+inside `core` by choosing message widths, and `fx_wide` exists to make that exact. Do not add a
+scenario per width — that is the same mistake as the per-style scenarios removed in 0.6.0.
+
 There were once `compact`, `braces` and `skipdefaults` scenarios, one per printed style, because a
 build could only print one way. 0.6.0 put the style in the function name, so one build now asserts
 all four exactly (`test_every_style_exactly`) and those three scenarios were removed. Fewer
@@ -254,7 +322,13 @@ Two further things that target taught, worth keeping in mind:
 
 Three fixtures, each load-bearing. Do not consolidate them:
 
-- `fixture.proto` — proto3, every field shape, generated with `--c-style`
+- `fixture.proto` — proto3, every field shape, generated with `--c-style`. Two things in it are
+  load-bearing beyond "one of each": `fx_shapes.rep_bytes` is the only repeated shape whose element
+  stride is a **padded struct** (`PB_BYTES_ARRAY_T(n)[]`), so locating element 1 has to use nanopb's
+  own `data_size` and not the declared `max_size`; and `fx_fit`/`fx_wide` exist so a test can sit
+  either side of `PRINT_FIT_WIDTH` from a single build, with the expectation derived from the
+  Kconfig value rather than hardcoded. Adding a field here also moves two pinned counts — a
+  `BUILD_ASSERT` on `PB_TF_FIELD_COUNT` and `test_descriptor_matches_nanopb`
 - `fixture2.proto` — proto2 only: `required`, an `extensions` range, `MSG_W_CB`, non-`STATIC`
   allocation
 - `fixture3.proto` — **the same shapes with nanopb's default naming**, which is the only thing

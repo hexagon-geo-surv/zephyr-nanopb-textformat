@@ -37,6 +37,8 @@ PB_TF_DEFINE(FX_DEEP3, fx_deep3_t);
 PB_TF_DEFINE(FX_DEEP2, fx_deep2_t);
 PB_TF_DEFINE(FX_DEEP1, fx_deep1_t);
 PB_TF_DEFINE(FX_ANON, fx_anon_t);
+PB_TF_DEFINE(FX_WIDE, fx_wide_t);
+PB_TF_DEFINE(FX_FIT, fx_fit_t);
 
 /* proto2 shapes: required, an extensions range, MSG_W_CB, and non-STATIC. */
 PB_TF_DEFINE(FX_P2, fx_p2_t);
@@ -54,8 +56,10 @@ PB_TF_DEFINE(FxDefInner, FxDefInner);
 
 /* The tables must agree with nanopb's own field counts. */
 BUILD_ASSERT(PB_TF_FIELD_COUNT(FX_SCALARS_FIELDLIST) == 20);
-BUILD_ASSERT(PB_TF_FIELD_COUNT(FX_SHAPES_FIELDLIST) == 11);
+BUILD_ASSERT(PB_TF_FIELD_COUNT(FX_SHAPES_FIELDLIST) == 12);
 BUILD_ASSERT(PB_TF_FIELD_COUNT(FX_INNER_FIELDLIST) == 2);
+BUILD_ASSERT(PB_TF_FIELD_COUNT(FX_WIDE_FIELDLIST) == 2);
+BUILD_ASSERT(PB_TF_FIELD_COUNT(FX_FIT_FIELDLIST) == 1);
 BUILD_ASSERT(PB_TF_FIELD_COUNT(FX_EMPTY_FIELDLIST) == 0);
 BUILD_ASSERT(PB_TF_FIELD_COUNT(FX_ANON_FIELDLIST) == 3);
 /* Six rows, because the extensions range synthesises one. */
@@ -88,7 +92,7 @@ ZTEST(pb_tf_macro, test_descriptor_matches_nanopb)
 	zassert_equal(fx_scalars_t_tf.count, 20, "got %u", fx_scalars_t_tf.count);
 	zassert_equal(fx_scalars_t_tf.struct_size, sizeof(fx_scalars_t));
 
-	zassert_equal(fx_shapes_t_tf.count, 11, "got %u", fx_shapes_t_tf.count);
+	zassert_equal(fx_shapes_t_tf.count, 12, "got %u", fx_shapes_t_tf.count);
 	zassert_equal(fx_shapes_t_tf.struct_size, sizeof(fx_shapes_t));
 
 	/* An empty message: nothing but the sentinel row. */
@@ -1548,24 +1552,19 @@ ZTEST(pb_tf_text, test_string_in_submessage)
 	zassert_equal(m.sing_msg.a, 1);
 }
 
-/*/*
+/*
  * ===========================================================================
  * The printer, and round-trip.
  *
- * Output style is a build option now, not an argument, so a test cannot sweep
- * flag combinations in a loop. Two consequences shape this suite:
- *
- *   - assertions that do not depend on style check for substrings, so they hold
- *     in every configuration;
- *   - the one test that pins exact output picks its expected string from the
- *     configuration, and testcase.yaml runs the four style combinations as
- *     separate scenarios so all of them are actually exercised.
+ * The style is named per call, so one build asserts every combination rather
+ * than needing a twister scenario each. Assertions that do not depend on style
+ * still check for substrings, so they hold in every configuration.
  * ===========================================================================
  */
 
 ZTEST_SUITE(pb_tf_print, NULL, NULL, NULL, NULL, NULL);
 
-/* Print into a local array and yield it. Style comes from Kconfig. */
+/* Print into a local array and yield it, in the default readable style. */
 #define PRINT_INTO(dst, tf, msg)                                                                   \
 	({                                                                                         \
 		int _e = pb_tf_print_buf_multiline((tf), (msg), (dst), sizeof(dst));                  \
@@ -1574,13 +1573,6 @@ ZTEST_SUITE(pb_tf_print, NULL, NULL, NULL, NULL, NULL);
 	})
 
 #define STYLE_SKIP IS_ENABLED(CONFIG_NANOPB_TEXTFORMAT_PRINT_SKIP_DEFAULTS)
-
-/*
- * The line style and braces are named per call now, so a single build asserts
- * every combination exactly -- which is stronger than the old arrangement,
- * where each style needed its own twister scenario and only one was live per
- * build.
- */
 
 /*
  * fx_scalars carries a field of every ltype, so printing it needs a build that
@@ -1592,11 +1584,6 @@ ZTEST_SUITE(pb_tf_print, NULL, NULL, NULL, NULL, NULL);
 	(IS_ENABLED(CONFIG_NANOPB_TEXTFORMAT_FLOAT) &&                                             \
 	 IS_ENABLED(CONFIG_CBPRINTF_FULL_INTEGRAL) && !IS_ENABLED(CONFIG_NANOPB_WITHOUT_64BIT))
 
-/*
- * The exact bytes, for whichever style this build selected. This is the test
- * that would catch a stray space or a missing newline, so it spells all four
- * combinations out rather than deriving them.
- */
 /*
  * The exact bytes of all four combinations, in one build. This is the test that
  * would catch a stray space or a missing newline.
@@ -1704,7 +1691,12 @@ ZTEST(pb_tf_print, test_callback_wrappers_match_styled)
 	zassert_str_equal(named, styled);
 }
 
-/* A submessage nests; multi-line indents it, compact keeps it tight. */
+/*
+ * A narrow leaf submessage folds onto one line in every style. fx_inner holds
+ * only scalars, so it is measured rather than expanded outright, and
+ * "sing_msg {a: 1, b: -2}" is 22 columns -- inside any FIT_WIDTH this suite
+ * runs at.
+ */
 ZTEST(pb_tf_print, test_submessage_style)
 {
 	fx_shapes_t m;
@@ -1717,15 +1709,24 @@ ZTEST(pb_tf_print, test_submessage_style)
 	zassert_not_null(strstr(out, "sing_msg {a: 1, b: -2}"), "got %s", out);
 
 	zassert_equal(pb_tf_print_buf_multiline(&fx_shapes_t_tf, &m, out, sizeof(out)), PB_TF_OK);
-	zassert_not_null(strstr(out, "sing_msg {\n  a: 1\n  b: -2\n}\n"), "got %s", out);
+	zassert_not_null(strstr(out, "sing_msg {a: 1, b: -2}\n"), "got %s", out);
 
 	/* Braces indent the whole body one level, so everything shifts. */
 	zassert_equal(pb_tf_print_buf_multiline_braces(&fx_shapes_t_tf, &m, out, sizeof(out)),
 		      PB_TF_OK);
-	zassert_not_null(strstr(out, "  sing_msg {\n    a: 1\n    b: -2\n  }\n"), "got %s", out);
+	zassert_not_null(strstr(out, "  sing_msg {a: 1, b: -2}\n"), "got %s", out);
 }
 
-ZTEST(pb_tf_print, test_two_levels_indent)
+/*
+ * A chain expands exactly as far as it actually nests, and no further.
+ *
+ * fx_deep1 and fx_deep2 each declare a submessage field, so both expand
+ * whatever their width -- that clause is what keeps the measuring pass flat.
+ * fx_deep3 declares only a scalar, so it is a leaf, gets measured, and
+ * "d3 {v: 9}" folds. The result is one indent level rather than three, which
+ * is the whole difference between this and a rule that propagated downwards.
+ */
+ZTEST(pb_tf_print, test_chain_expands_only_where_it_nests)
 {
 	fx_deep1_t m;
 	char out[192];
@@ -1737,12 +1738,12 @@ ZTEST(pb_tf_print, test_two_levels_indent)
 	zassert_equal(pb_tf_parse(&fx_deep1_t_tf, &m, "d2 { d3 { v: 9 } }", NULL), PB_TF_OK);
 
 	zassert_equal(pb_tf_print_buf_multiline(&fx_deep1_t_tf, &m, out, sizeof(out)), PB_TF_OK);
-	zassert_not_null(strstr(out, "d2 {\n  d3 {\n    v: 9\n  }\n}\n"), "got %s", out);
+	zassert_not_null(strstr(out, "d2 {\n  d3 {v: 9}\n}\n"), "got %s", out);
 
+	/* Braces shift everything a level, and the indent counts toward the fit. */
 	zassert_equal(pb_tf_print_buf_multiline_braces(&fx_deep1_t_tf, &m, out, sizeof(out)),
 		      PB_TF_OK);
-	zassert_not_null(strstr(out, "  d2 {\n    d3 {\n      v: 9\n    }\n  }\n"), "got %s",
-			 out);
+	zassert_not_null(strstr(out, "  d2 {\n    d3 {v: 9}\n  }\n"), "got %s", out);
 }
 
 /* An absent optional prints nothing; a present zero prints even under SKIP. */
@@ -1780,8 +1781,14 @@ ZTEST(pb_tf_print, test_skip_defaults_follows_configuration)
 	}
 }
 
-/* Repeated fields print as repetition, which is what protoc emits. */
-ZTEST(pb_tf_print, test_repeated_prints_as_repetition)
+/*
+ * A repeated field prints as one bracket list rather than once per element.
+ *
+ * Both spellings are valid text format and both re-parse, but the list does not
+ * repeat the field name, so which element you are reading is visible instead of
+ * merely countable -- and the line is shorter.
+ */
+ZTEST(pb_tf_print, test_repeated_prints_as_list)
 {
 	fx_shapes_t m;
 	char out[192];
@@ -1789,12 +1796,26 @@ ZTEST(pb_tf_print, test_repeated_prints_as_repetition)
 
 	zassert_equal(pb_tf_parse(&fx_shapes_t_tf, &m, "rep_scalar: [1,2,3]", NULL),
 		      PB_TF_OK);
-	s = PRINT_INTO(out, &fx_shapes_t_tf, &m);
 
-	zassert_not_null(strstr(s, "rep_scalar: 1"), "got %s", s);
-	zassert_not_null(strstr(s, "rep_scalar: 2"), "got %s", s);
-	zassert_not_null(strstr(s, "rep_scalar: 3"), "got %s", s);
-	zassert_is_null(strstr(s, "["), "never a list on output: %s", s);
+	s = PRINT_INTO(out, &fx_shapes_t_tf, &m);
+	zassert_not_null(strstr(s, "rep_scalar: [1, 2, 3]"), "got %s", s);
+	zassert_is_null(strstr(s, "rep_scalar: 1"), "the name must not repeat: %s", s);
+
+	zassert_equal(pb_tf_print_buf_compact(&fx_shapes_t_tf, &m, out, sizeof(out)), PB_TF_OK);
+	zassert_not_null(strstr(out, "rep_scalar: [1, 2, 3]"), "got %s", out);
+}
+
+/* A repeated field with no elements prints nothing at all, never "rep: []". */
+ZTEST(pb_tf_print, test_empty_repeated_prints_nothing)
+{
+	fx_shapes_t m;
+	char out[192];
+	const char *s;
+
+	zassert_equal(pb_tf_parse(&fx_shapes_t_tf, &m, "rep_scalar: []", NULL), PB_TF_OK);
+
+	s = PRINT_INTO(out, &fx_shapes_t_tf, &m);
+	zassert_is_null(strstr(s, "rep_scalar"), "an empty list is absent, not empty: %s", s);
 }
 
 ZTEST(pb_tf_print, test_bool_is_canonical)
@@ -1950,6 +1971,111 @@ ZTEST(pb_tf_print, test_print_buf_reports_truncation)
 }
 
 /*
+ * The fit threshold, to the byte, either side of the boundary.
+ *
+ * fx_fit holds one fx_wide, which declares only scalars -- so it is measured
+ * rather than expanded outright. Printed it is
+ *
+ *     leaf {n: 1, pad: "<pad>"}
+ *
+ * which is 20 columns plus the pad, at no indentation. The expected pad lengths
+ * are therefore derived from the configured width rather than hardcoded, so
+ * this holds whatever FIT_WIDTH a build picks.
+ */
+ZTEST(pb_tf_print, test_fit_boundary_exactly)
+{
+	const size_t frame = sizeof("leaf {n: 1, pad: \"\"}") - 1U;
+	fx_fit_t m;
+	char out[512];
+	char want[512];
+	size_t pad;
+
+	if ((size_t)CONFIG_NANOPB_TEXTFORMAT_PRINT_FIT_WIDTH <= frame) {
+		/* No pad length can reach the boundary from below. */
+		ztest_test_skip();
+	}
+
+	pad = (size_t)CONFIG_NANOPB_TEXTFORMAT_PRINT_FIT_WIDTH - frame;
+	zassert_true(pad + 1U < sizeof(m.leaf.pad), "pad field too small for this width");
+
+	/* Exactly at the width: folds. */
+	pb_tf_clear(&fx_fit_t_tf, &m);
+	m.has_leaf = true;
+	m.leaf.n = 1U;
+	(void)memset(m.leaf.pad, 'x', pad);
+	m.leaf.pad[pad] = '\0';
+
+	zassert_equal(pb_tf_print_buf_multiline(&fx_fit_t_tf, &m, out, sizeof(out)), PB_TF_OK);
+	(void)snprintk(want, sizeof(want), "leaf {n: 1, pad: \"%s\"}\n", m.leaf.pad);
+	zassert_str_equal(out, want, "at exactly %d columns it must fold",
+			  CONFIG_NANOPB_TEXTFORMAT_PRINT_FIT_WIDTH);
+
+	/* One column over: breaks apart. */
+	m.leaf.pad[pad] = 'x';
+	m.leaf.pad[pad + 1U] = '\0';
+
+	zassert_equal(pb_tf_print_buf_multiline(&fx_fit_t_tf, &m, out, sizeof(out)), PB_TF_OK);
+	(void)snprintk(want, sizeof(want), "leaf {\n  n: 1\n  pad: \"%s\"\n}\n", m.leaf.pad);
+	zassert_str_equal(out, want, "one column over the width it must expand");
+}
+
+/*
+ * A body expands because its *type* declares a submessage field, not because
+ * one is set.
+ *
+ * That is what keeps the measuring pass flat -- anything measured is a leaf, so
+ * there is no recursion and no second frame stack -- and it is visible here:
+ * fx_deep2 prints an empty body and still breaks across lines.
+ */
+ZTEST(pb_tf_print, test_expands_on_descriptor_not_value)
+{
+	fx_deep1_t m;
+	char out[192];
+
+	if (CONFIG_NANOPB_TEXTFORMAT_MAX_DEPTH < 2) {
+		ztest_test_skip();
+	}
+
+	pb_tf_clear(&fx_deep1_t_tf, &m);
+	m.has_d2 = true;
+
+	zassert_equal(pb_tf_print_buf_multiline(&fx_deep1_t_tf, &m, out, sizeof(out)), PB_TF_OK);
+	zassert_str_equal(out, "d2 {\n}\n");
+}
+
+/* A list of submessages puts one element per line, with each element folded. */
+ZTEST(pb_tf_print, test_message_list_expands_with_folded_elements)
+{
+	fx_shapes_t m;
+	char out[256];
+
+	zassert_equal(pb_tf_parse(&fx_shapes_t_tf, &m, "rep_msg: [{a: 9, b: 1}, {a: 10, b: 2}]",
+				  NULL),
+		      PB_TF_OK);
+
+	zassert_equal(pb_tf_print_buf_multiline(&fx_shapes_t_tf, &m, out, sizeof(out)), PB_TF_OK);
+	zassert_not_null(strstr(out, "rep_msg: [\n  {a: 9, b: 1},\n  {a: 10, b: 2}\n]\n"),
+			 "got %s", out);
+
+	/* Compact folds the same list onto one line. */
+	zassert_equal(pb_tf_print_buf_compact(&fx_shapes_t_tf, &m, out, sizeof(out)), PB_TF_OK);
+	zassert_not_null(strstr(out, "rep_msg: [{a: 9, b: 1}, {a: 10, b: 2}]"), "got %s", out);
+}
+
+/* Repeated bytes print as a list, and each element is located by data_size. */
+ZTEST(pb_tf_print, test_repeated_bytes_prints_as_list)
+{
+	fx_shapes_t m;
+	char out[192];
+
+	zassert_equal(pb_tf_parse(&fx_shapes_t_tf, &m, "rep_bytes: [\"\\000\\377\", \"ab\"]", NULL),
+		      PB_TF_OK);
+
+	zassert_equal(pb_tf_print_buf_compact(&fx_shapes_t_tf, &m, out, sizeof(out)), PB_TF_OK);
+	zassert_not_null(strstr(out, "rep_bytes: [\"\\000\\377\", \"ab\"]"), "got %s", out);
+}
+
+/*
  * ===========================================================================
  * Round-trip: parse -> print -> parse, compared as structs and as text.
  *
@@ -2009,6 +2135,13 @@ ZTEST(pb_tf_roundtrip, test_every_field_shape)
 		"plain_scalar: 1 opt_scalar: 2 rep_scalar: [3] sing_msg { a: 4 } c_num: 5",
 		/* Bytes that need escaping, adjacent to digits. */
 		"rep_string: [\"\\012\\061\"]",
+		/*
+		 * Repeated bytes: the one repeated shape whose element stride is
+		 * a padded pb_bytes_array_t, so locating element 1 exercises
+		 * nanopb's data_size rather than the declared max_size.
+		 */
+		"rep_bytes: [\"\\000\\377\", \"ab\"]",
+		"rep_bytes: [\"\"]",
 	};
 
 	ARRAY_FOR_EACH(inputs, i) {

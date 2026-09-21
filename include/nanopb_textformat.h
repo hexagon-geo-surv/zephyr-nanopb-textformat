@@ -50,10 +50,10 @@ extern "C" {
  */
 /**@{*/
 #define NANOPB_TEXTFORMAT_VERSION_MAJOR 0
-#define NANOPB_TEXTFORMAT_VERSION_MINOR 7
+#define NANOPB_TEXTFORMAT_VERSION_MINOR 8
 #define NANOPB_TEXTFORMAT_VERSION_PATCH 0
 
-#define NANOPB_TEXTFORMAT_VERSION_STRING "0.7.0"
+#define NANOPB_TEXTFORMAT_VERSION_STRING "0.8.0"
 
 /**
  * @brief Version as @c 0xMMmmpp, for comparison.
@@ -222,6 +222,7 @@ struct pb_tf_status {
  * now, so a build states its intent once instead of at every call site:
  *
  *   CONFIG_NANOPB_TEXTFORMAT_PRINT_SKIP_DEFAULTS
+ *   CONFIG_NANOPB_TEXTFORMAT_PRINT_FIT_WIDTH
  *
  * pb_tf_parse() versus pb_tf_merge(), and the line style and braces by function
  * name -- pb_tf_print_compact(), pb_tf_print_multiline_braces() and so on.
@@ -282,11 +283,22 @@ int pb_tf_merge(const struct pb_tf_msg *tf, void *msg, const char *text,
  * @c "get [compact] [braces]", say -- where the alternative is a four-way
  * branch picking among the wrappers.
  *
+ * The two shapes, in both cases with repeated fields folded into bracket lists
+ * (@c "tags: [1, 2]"):
+ *
+ *   - @p compact puts the whole message on one line.
+ *   - otherwise one field per line at two spaces per level, except that a
+ *     submessage or a list folds onto a single line when it fits within
+ *     @c CONFIG_NANOPB_TEXTFORMAT_PRINT_FIT_WIDTH columns, indentation
+ *     included. A submessage whose type declares a submessage field always
+ *     breaks, whatever its width, and so does a repeated field of
+ *     submessages. See docs/dialect.md.
+ *
  * @param tf       descriptor from PB_TF_DEFINE
  * @param msg      the struct to print
  * @param out      character sink
  * @param ctx      passed to @p out
- * @param compact  one line, rather than one field per line
+ * @param compact  one line, rather than fit-or-expand across several
  * @param braces   wrap the whole message in @c { }
  *
  * @return 0, or a negated @ref pb_tf_err -- the first error encountered.
@@ -397,7 +409,7 @@ int pb_tf_out_buf(int c, void *ctx);
  * @param msg      the struct to print
  * @param buf      destination, always NUL-terminated on return
  * @param size     bytes available in @p buf, including the terminator
- * @param compact  one line, rather than one field per line
+ * @param compact  one line, rather than fit-or-expand across several
  * @param braces   wrap the whole message in @c { }
  *
  * @return 0, @c -PB_TF_ERR_NO_SPACE if the output was truncated, or the first

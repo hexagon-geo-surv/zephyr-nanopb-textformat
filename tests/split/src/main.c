@@ -117,8 +117,8 @@ ZTEST(pb_tf_split, test_print_half_alone)
 	zassert_equal(pb_tf_print_buf_multiline(&Split_tf, &m, out, sizeof(out)), PB_TF_OK);
 
 	zassert_not_null(strstr(out, "a: 7"), "got %s", out);
-	zassert_not_null(strstr(out, "b: 1"), "got %s", out);
-	zassert_not_null(strstr(out, "b: 2"), "got %s", out);
+	/* Repeated fields print as one bracket list, not once per element. */
+	zassert_not_null(strstr(out, "b: [1, 2]"), "got %s", out);
 	zassert_not_null(strstr(out, "v: -3"), "got %s", out);
 	zassert_not_null(strstr(out, "name: \"hi\""), "got %s", out);
 
