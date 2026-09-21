@@ -129,6 +129,11 @@ print at the default depth peaks near 480 B rather than 320. `pb_tf_measure` is 
 every `MAX_DEPTH`**, which is the measurable form of "measuring needs no second frame stack"; if that
 number ever starts moving with depth, someone has reintroduced a descent into it.
 
+Under `PRINT_FIT=n` the chain is gone and `pb_tf_locate` is inlined back in, so print is a single
+264 B frame — *larger* than the 248 B `FIT=y` figure, because the iterator now lives inside it, and
+still much cheaper overall. Depth 1/8/32 print figures above are `FIT=y`; the 16 B per level is
+`sizeof(struct pb_tf_pframe)` either way.
+
 The one subtlety recursion handled for free: a repeated submessage's element count must not include
 an element whose body failed halfway through. So the **commit** (`has_` bit, repeated count, or oneof
 `which_`) is deferred and carried on the *child* frame, applied when its closing brace is consumed.
@@ -180,6 +185,35 @@ Two things to keep that way:
 `pb_tf_has_msg_row()` is a **descriptor** scan, not a value scan. A message whose submessage field
 happens to be unset therefore still expands. That is the price of the rule above, and
 `test_expands_on_descriptor_not_value` pins it so nobody "fixes" it into a recursive lookahead.
+
+**The measuring pass costs roughly twice its own size, and the reason is invisible until measured.**
+`pb_tf_measure()` is the only *other* caller of `pb_tf_locate()` and `pb_tf_print_scalar()`, the two
+largest helpers in the file. With one call site each GCC inlines and specialises both into the walk;
+a second call site makes it emit them as shared, unspecialised functions — 300 B and 136 B — and
+`pb_tf_print_styled()` does **not** shrink in exchange. Measured on mps2/an385: the pass is ~520 B of
+its own code but ~605 B in total, and `PRINT_FIT=n` takes print.c from 2426 B to 1821 B, at which
+point both helpers disappear from `nm` entirely. Anything that gives either helper a second caller
+pays this again, so check `nm` rather than counting the lines you added.
+
+That is why the pass is behind `CONFIG_NANOPB_TEXTFORMAT_PRINT_FIT`, with `#if` and not
+`IS_ENABLED` — same reason as the float paths: the point is that nothing references the code. The
+`#else` supplies two constant decisions (`msg_inlines` → `pb_tf_compact()`, `list_expands` →
+`!pb_tf_compact()`), which reproduce `FIT_WIDTH=0` output exactly. Keep those two in step with the
+real ones.
+
+**A rejected design worth not re-proposing.** The obvious way to avoid duplicating emission is to
+have the measuring pass *be* the walk: floor the loop, swap in a counting sink, force compact, and
+call `pb_tf_run_print()` from the decision helper. It cannot be done that way — the call graph
+becomes `run_print` → `msg_inlines` → trial → `run_print`, which is **indirect recursion** and
+violates MISRA C:2025 Rule 17.2 exactly as the recursive printer did. Doing it without a cycle means
+running the trial as a *mode of the same loop*, with the saved sink and the pending decision held in
+the printer. That is possible, but it is a state machine inside the walk, not a small refactor.
+
+**Indentation is per frame, not per stack depth.** `pb_tf_pframe.level` exists because an expanded
+list's extra level lives on the *parent* frame, so an element that breaks across lines has to carry
+it into the child — `child.level = parent.level + 1 + (parent has LIST_EXPAND ? 1 : 0)`. Deriving the
+indent from `pr->top` renders such an element's body level with its own opening brace. It fits the
+padding the frame already had, so the frame is still 16 bytes.
 
 ### Values are written straight into the destination
 
@@ -281,8 +315,14 @@ configured — keep them meaningful:
 | `no64` | genuine 8-byte fields degrade cleanly (they do **not** narrow) |
 | `shallow` | `MAX_DEPTH=1` actually reaches `PB_TF_ERR_DEPTH` |
 | `reduced` | `CBPRINTF_REDUCED_INTEGRAL` — narrow fields still print, 64-bit ones degrade |
+| `nofit` | `PRINT_FIT=n` compiles the `#else` decisions and degrades to one field per line |
 
-No scenario varies `PRINT_FIT_WIDTH`, deliberately: both the fold and the expand branch are reachable
+`nofit` earned its place immediately: it is what caught the indent bug fixed in 0.8.1. Every fixture
+list holds leaves, which fold onto one line, so no `FIT=y` test ever rendered a list element that
+breaks — and the printer was indenting such an element's body level with its own brace. `fx_shapes`
+now carries `rep_deep` (a `repeated fx_deep2`) so `FIT=y` covers it too.
+
+No scenario varies `PRINT_FIT_WIDTH`, though: both the fold and the expand branch are reachable
 inside `core` by choosing message widths, and `fx_wide` exists to make that exact. Do not add a
 scenario per width — that is the same mistake as the per-style scenarios removed in 0.6.0.
 

@@ -276,7 +276,7 @@ rather than a function of the input. Measured on Cortex-M3 at `-Os`:
 | | Stack |
 |---|---|
 | `pb_tf_parse()` | `132 + 20n` bytes, where *n* is `CONFIG_NANOPB_TEXTFORMAT_MAX_DEPTH` — 296 B at the default 8 |
-| `pb_tf_print_styled()` | 248 B, plus 232 B for the fit-or-expand measuring chain above it — about 480 B in total |
+| `pb_tf_print_styled()` | 248 B, plus 232 B for the fit-or-expand measuring chain above it — about 480 B in total, or 264 B flat with `PRINT_FIT=n` |
 
 The shell thread gets **2048 bytes** by default (`CONFIG_SHELL_STACK_SIZE`), so the default depth
 leaves comfortable room. Raising `MAX_DEPTH` is linear and visible in a single `-fstack-usage` line;

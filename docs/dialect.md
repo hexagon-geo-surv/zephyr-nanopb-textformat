@@ -147,9 +147,10 @@ Two cases do not consult the width, so that deciding never needs to look inside 
   unset breaks too — `deep` above, and `d2`, for that reason; `d3` declares only a scalar and folds.
 - A repeated field **of submessages** always puts one element per line.
 
-`FIT_WIDTH=0` therefore means strictly one field per line. None of this changes what is accepted, and
-none of it is promised to be stable: the widths at which a given message folds may change between
-releases, while the *set* of shapes above will not.
+`FIT_WIDTH=0`, and `CONFIG_NANOPB_TEXTFORMAT_PRINT_FIT=n`, both mean strictly one field per line;
+the second also leaves the measuring code out of the build. None of this changes what is accepted,
+and none of it is promised to be stable: the widths at which a given message folds may change
+between releases, while the *set* of shapes above will not.
 
 ## Semantics worth knowing
 

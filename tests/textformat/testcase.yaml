@@ -42,6 +42,14 @@ tests:
     extra_configs:
       - CONFIG_CBPRINTF_REDUCED_INTEGRAL=y
 
+  # The fit-or-expand measuring pass left out. Output degrades to one field
+  # per line, which is what PRINT_FIT_WIDTH=0 also gives -- but this scenario
+  # is about the #else branch existing and behaving, since PRINT_FIT=n is the
+  # only configuration where the measuring code is not compiled at all.
+  nanopb_textformat.nofit:
+    extra_configs:
+      - CONFIG_NANOPB_TEXTFORMAT_PRINT_FIT=n
+
   # The Kconfig minimum: one level of submessage allowed, so the fixture's
   # two-level chain actually hits PB_TF_ERR_DEPTH rather than merely being
   # configured to.

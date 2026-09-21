@@ -56,7 +56,7 @@ PB_TF_DEFINE(FxDefInner, FxDefInner);
 
 /* The tables must agree with nanopb's own field counts. */
 BUILD_ASSERT(PB_TF_FIELD_COUNT(FX_SCALARS_FIELDLIST) == 20);
-BUILD_ASSERT(PB_TF_FIELD_COUNT(FX_SHAPES_FIELDLIST) == 12);
+BUILD_ASSERT(PB_TF_FIELD_COUNT(FX_SHAPES_FIELDLIST) == 13);
 BUILD_ASSERT(PB_TF_FIELD_COUNT(FX_INNER_FIELDLIST) == 2);
 BUILD_ASSERT(PB_TF_FIELD_COUNT(FX_WIDE_FIELDLIST) == 2);
 BUILD_ASSERT(PB_TF_FIELD_COUNT(FX_FIT_FIELDLIST) == 1);
@@ -92,7 +92,7 @@ ZTEST(pb_tf_macro, test_descriptor_matches_nanopb)
 	zassert_equal(fx_scalars_t_tf.count, 20, "got %u", fx_scalars_t_tf.count);
 	zassert_equal(fx_scalars_t_tf.struct_size, sizeof(fx_scalars_t));
 
-	zassert_equal(fx_shapes_t_tf.count, 12, "got %u", fx_shapes_t_tf.count);
+	zassert_equal(fx_shapes_t_tf.count, 13, "got %u", fx_shapes_t_tf.count);
 	zassert_equal(fx_shapes_t_tf.struct_size, sizeof(fx_shapes_t));
 
 	/* An empty message: nothing but the sentinel row. */
@@ -1575,6 +1575,21 @@ ZTEST_SUITE(pb_tf_print, NULL, NULL, NULL, NULL, NULL);
 #define STYLE_SKIP IS_ENABLED(CONFIG_NANOPB_TEXTFORMAT_PRINT_SKIP_DEFAULTS)
 
 /*
+ * Whether a narrow submessage or list folds onto one line. PRINT_FIT=n leaves
+ * the measuring pass out of the build entirely, and PRINT_FIT_WIDTH=0 keeps it
+ * but makes nothing fit; both give one field per line, so both are covered by
+ * one predicate.
+ */
+#if defined(CONFIG_NANOPB_TEXTFORMAT_PRINT_FIT)
+#define STYLE_FIT_WIDTH CONFIG_NANOPB_TEXTFORMAT_PRINT_FIT_WIDTH
+#else
+/* The symbol does not exist in that build, and no width would apply anyway. */
+#define STYLE_FIT_WIDTH 0
+#endif
+
+#define STYLE_FITS (STYLE_FIT_WIDTH > 0)
+
+/*
  * fx_scalars carries a field of every ltype, so printing it needs a build that
  * can represent all of them: floats, and integers wider than 32 bits. Tests
  * that print it are about something else (escapes, bools) and simply skip where
@@ -1709,12 +1724,16 @@ ZTEST(pb_tf_print, test_submessage_style)
 	zassert_not_null(strstr(out, "sing_msg {a: 1, b: -2}"), "got %s", out);
 
 	zassert_equal(pb_tf_print_buf_multiline(&fx_shapes_t_tf, &m, out, sizeof(out)), PB_TF_OK);
-	zassert_not_null(strstr(out, "sing_msg {a: 1, b: -2}\n"), "got %s", out);
+	zassert_not_null(strstr(out, STYLE_FITS ? "sing_msg {a: 1, b: -2}\n"
+					        : "sing_msg {\n  a: 1\n  b: -2\n}\n"),
+			 "got %s", out);
 
 	/* Braces indent the whole body one level, so everything shifts. */
 	zassert_equal(pb_tf_print_buf_multiline_braces(&fx_shapes_t_tf, &m, out, sizeof(out)),
 		      PB_TF_OK);
-	zassert_not_null(strstr(out, "  sing_msg {a: 1, b: -2}\n"), "got %s", out);
+	zassert_not_null(strstr(out, STYLE_FITS ? "  sing_msg {a: 1, b: -2}\n"
+					        : "  sing_msg {\n    a: 1\n    b: -2\n  }\n"),
+			 "got %s", out);
 }
 
 /*
@@ -1738,12 +1757,16 @@ ZTEST(pb_tf_print, test_chain_expands_only_where_it_nests)
 	zassert_equal(pb_tf_parse(&fx_deep1_t_tf, &m, "d2 { d3 { v: 9 } }", NULL), PB_TF_OK);
 
 	zassert_equal(pb_tf_print_buf_multiline(&fx_deep1_t_tf, &m, out, sizeof(out)), PB_TF_OK);
-	zassert_not_null(strstr(out, "d2 {\n  d3 {v: 9}\n}\n"), "got %s", out);
+	zassert_not_null(strstr(out, STYLE_FITS ? "d2 {\n  d3 {v: 9}\n}\n"
+					        : "d2 {\n  d3 {\n    v: 9\n  }\n}\n"),
+			 "got %s", out);
 
 	/* Braces shift everything a level, and the indent counts toward the fit. */
 	zassert_equal(pb_tf_print_buf_multiline_braces(&fx_deep1_t_tf, &m, out, sizeof(out)),
 		      PB_TF_OK);
-	zassert_not_null(strstr(out, "  d2 {\n    d3 {v: 9}\n  }\n"), "got %s", out);
+	zassert_not_null(strstr(out, STYLE_FITS ? "  d2 {\n    d3 {v: 9}\n  }\n"
+					        : "  d2 {\n    d3 {\n      v: 9\n    }\n  }\n"),
+			 "got %s", out);
 }
 
 /* An absent optional prints nothing; a present zero prints even under SKIP. */
@@ -1798,7 +1821,9 @@ ZTEST(pb_tf_print, test_repeated_prints_as_list)
 		      PB_TF_OK);
 
 	s = PRINT_INTO(out, &fx_shapes_t_tf, &m);
-	zassert_not_null(strstr(s, "rep_scalar: [1, 2, 3]"), "got %s", s);
+	zassert_not_null(strstr(s, STYLE_FITS ? "rep_scalar: [1, 2, 3]"
+					      : "rep_scalar: [\n  1,\n  2,\n  3\n]"),
+			 "got %s", s);
 	zassert_is_null(strstr(s, "rep_scalar: 1"), "the name must not repeat: %s", s);
 
 	zassert_equal(pb_tf_print_buf_compact(&fx_shapes_t_tf, &m, out, sizeof(out)), PB_TF_OK);
@@ -1990,12 +2015,22 @@ ZTEST(pb_tf_print, test_fit_boundary_exactly)
 	char want[512];
 	size_t pad;
 
-	if ((size_t)CONFIG_NANOPB_TEXTFORMAT_PRINT_FIT_WIDTH <= frame) {
+	if (!STYLE_FITS) {
+		/* Nothing folds, so there is no boundary to sit either side of. */
+		ztest_test_skip();
+	}
+	if ((size_t)STYLE_FIT_WIDTH <= frame) {
 		/* No pad length can reach the boundary from below. */
 		ztest_test_skip();
 	}
 
-	pad = (size_t)CONFIG_NANOPB_TEXTFORMAT_PRINT_FIT_WIDTH - frame;
+	/*
+	 * Clamped, not just guarded by the skip above: with a width of 0 the
+	 * subtraction underflows, and the compiler folds that into an
+	 * out-of-bounds index it warns about -- which twister treats as an
+	 * error -- whether or not the code can run.
+	 */
+	pad = (STYLE_FIT_WIDTH > (int)frame) ? ((size_t)STYLE_FIT_WIDTH - frame) : 0U;
 	zassert_true(pad + 1U < sizeof(m.leaf.pad), "pad field too small for this width");
 
 	/* Exactly at the width: folds. */
@@ -2007,8 +2042,7 @@ ZTEST(pb_tf_print, test_fit_boundary_exactly)
 
 	zassert_equal(pb_tf_print_buf_multiline(&fx_fit_t_tf, &m, out, sizeof(out)), PB_TF_OK);
 	(void)snprintk(want, sizeof(want), "leaf {n: 1, pad: \"%s\"}\n", m.leaf.pad);
-	zassert_str_equal(out, want, "at exactly %d columns it must fold",
-			  CONFIG_NANOPB_TEXTFORMAT_PRINT_FIT_WIDTH);
+	zassert_str_equal(out, want, "at exactly %d columns it must fold", STYLE_FIT_WIDTH);
 
 	/* One column over: breaks apart. */
 	m.leaf.pad[pad] = 'x';
@@ -2054,12 +2088,46 @@ ZTEST(pb_tf_print, test_message_list_expands_with_folded_elements)
 		      PB_TF_OK);
 
 	zassert_equal(pb_tf_print_buf_multiline(&fx_shapes_t_tf, &m, out, sizeof(out)), PB_TF_OK);
-	zassert_not_null(strstr(out, "rep_msg: [\n  {a: 9, b: 1},\n  {a: 10, b: 2}\n]\n"),
+	zassert_not_null(strstr(out, STYLE_FITS
+					? "rep_msg: [\n  {a: 9, b: 1},\n  {a: 10, b: 2}\n]\n"
+					: "rep_msg: [\n  {\n    a: 9\n    b: 1\n  },\n"
+					  "  {\n    a: 10\n    b: 2\n  }\n]\n"),
 			 "got %s", out);
 
 	/* Compact folds the same list onto one line. */
 	zassert_equal(pb_tf_print_buf_compact(&fx_shapes_t_tf, &m, out, sizeof(out)), PB_TF_OK);
 	zassert_not_null(strstr(out, "rep_msg: [{a: 9, b: 1}, {a: 10, b: 2}]"), "got %s", out);
+}
+
+/*
+ * An element of a list that itself breaks across lines is indented inside the
+ * list, not level with its own brace.
+ *
+ * The list's extra indent level lives on the *parent* frame, so a printer that
+ * derived indentation from the stack depth alone renders this element's body
+ * level with its opening brace. Every other fixture list holds leaves, which
+ * fold onto one line and never show it.
+ */
+ZTEST(pb_tf_print, test_list_element_that_breaks_is_indented)
+{
+	fx_shapes_t m;
+	char out[256];
+
+	if (CONFIG_NANOPB_TEXTFORMAT_MAX_DEPTH < 3) {
+		ztest_test_skip();
+	}
+
+	zassert_equal(pb_tf_parse(&fx_shapes_t_tf, &m, "rep_deep: [{d3 {v: 1}}]", NULL),
+		      PB_TF_OK);
+
+	zassert_equal(pb_tf_print_buf_multiline(&fx_shapes_t_tf, &m, out, sizeof(out)), PB_TF_OK);
+	zassert_not_null(strstr(out, STYLE_FITS ? "rep_deep: [\n  {\n    d3 {v: 1}\n  }\n]\n"
+						: "rep_deep: [\n  {\n    d3 {\n      v: 1\n    }\n  }\n]\n"),
+			 "got %s", out);
+
+	/* Compact is unaffected: everything is on one line anyway. */
+	zassert_equal(pb_tf_print_buf_compact(&fx_shapes_t_tf, &m, out, sizeof(out)), PB_TF_OK);
+	zassert_not_null(strstr(out, "rep_deep: [{d3 {v: 1}}]"), "got %s", out);
 }
 
 /* Repeated bytes print as a list, and each element is located by data_size. */

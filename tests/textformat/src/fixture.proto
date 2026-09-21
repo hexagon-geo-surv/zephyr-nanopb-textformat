@@ -97,6 +97,10 @@ message fx_shapes {
   // data_size rather than the declared max_size, which tail padding differs
   // from. Untested in either direction before 0.8.0.
   repeated bytes rep_bytes = 12;
+  // A list element that nests, so the element itself breaks across lines. The
+  // list's extra indent level lives on the parent frame, so this is the only
+  // shape that catches a printer failing to carry it into the child.
+  repeated fx_deep2 rep_deep = 13;
 
   oneof choice {
     uint32 c_num = 9;

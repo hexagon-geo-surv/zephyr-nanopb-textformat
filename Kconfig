@@ -91,9 +91,28 @@ config NANOPB_TEXTFORMAT_PRINT_SKIP_DEFAULTS
 	  field that was explicitly set to zero -- presence is tracked
 	  separately -- nor an empty repeated field, which has nothing to print.
 
+config NANOPB_TEXTFORMAT_PRINT_FIT
+	bool "Fold narrow submessages and lists onto one line"
+	depends on NANOPB_TEXTFORMAT_PRINT
+	default y
+	help
+	  Build the fit-or-expand measuring pass, which lets the multi-line
+	  styles keep a narrow submessage or list on a single line instead of
+	  breaking every one across lines. See PRINT_FIT_WIDTH for the rule.
+
+	  Saying n is not the same as PRINT_FIT_WIDTH=0. Both produce exactly
+	  one field per line, but n also leaves the measuring code out of the
+	  build, which is worth about 1050 B of flash and 190 B of stack --
+	  more than the measuring pass itself, because it is the only other
+	  caller of the two largest helpers in the printer, and giving them a
+	  second call site is what stops the compiler inlining them.
+
+	  Bracket lists are not affected: a repeated field prints as
+	  "tags: [1, 2]" either way.
+
 config NANOPB_TEXTFORMAT_PRINT_FIT_WIDTH
 	int "Line width below which a submessage or list stays on one line"
-	depends on NANOPB_TEXTFORMAT_PRINT
+	depends on NANOPB_TEXTFORMAT_PRINT_FIT
 	default 64
 	range 0 255
 	help
@@ -114,7 +133,8 @@ config NANOPB_TEXTFORMAT_PRINT_FIT_WIDTH
 	  submessage field breaks too. A repeated field of submessages always
 	  puts one element per line, for the same reason.
 
-	  0 means nothing ever fits, i.e. strictly one field per line.
+	  0 means nothing ever fits, i.e. strictly one field per line. To get
+	  that shape *and* reclaim the flash, say n to PRINT_FIT instead.
 
 	  64 leaves room under an 80-column terminal for an inlined field to
 	  stay clear of the wrap point at a few levels of nesting.

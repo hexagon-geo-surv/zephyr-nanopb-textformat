@@ -45,6 +45,15 @@ struct pb_tf_pframe {
 	uint16_t index;
 	/** Next element to visit, for a repeated row. */
 	pb_size_t elem;
+	/**
+	 * Indentation level of this body's fields.
+	 *
+	 * Not derived from the stack depth, which would be one short inside an
+	 * expanded list: the list's extra level lives on the *parent* frame, so
+	 * an element that breaks across lines has to carry it down. Fits in the
+	 * padding the struct already had, so a level still costs 16 bytes.
+	 */
+	uint8_t level;
 	/** PB_TF_PF_* */
 	uint8_t flags;
 };
@@ -79,10 +88,12 @@ struct pb_tf_printer {
 
 /*
  * Width below which a submessage or a list stays on one line. Not in
- * nanopb_textformat_priv.h: that header is shared with the parser, and this
- * symbol does not exist in a build with the printer configured out.
+ * nanopb_textformat_priv.h: that header is shared with the parser, and neither
+ * symbol exists in a build with the printer, or just the fit pass, left out.
  */
+#if defined(CONFIG_NANOPB_TEXTFORMAT_PRINT_FIT)
 #define PB_TF_FIT_WIDTH CONFIG_NANOPB_TEXTFORMAT_PRINT_FIT_WIDTH
+#endif
 
 /*
  * ---------------------------------------------------------------------------
@@ -141,7 +152,7 @@ static unsigned int pb_tf_indent_cols(const struct pb_tf_printer *pr)
 	const struct pb_tf_pframe *fr = &pr->stack[pr->top];
 	unsigned int extra = ((fr->flags & PB_TF_PF_LIST_EXPAND) != 0U) ? 1U : 0U;
 
-	return (pr->base + pr->top + extra) * 2U;
+	return (pr->base + (unsigned int)fr->level + extra) * 2U;
 }
 
 static void pb_tf_indent(struct pb_tf_printer *pr)
@@ -589,8 +600,21 @@ static void pb_tf_advance(struct pb_tf_pframe *fr, const struct pb_tf_field *row
  * carry another stack[PB_TF_MAX_DEPTH + 1] -- 144 bytes at the default depth.
  * That is safe because pb_tf_print_scalar() reads only out/ctx: no frame, no
  * style, no printer state of its own.
+ *
+ * The whole pass is optional. CONFIG_NANOPB_TEXTFORMAT_PRINT_FIT=n replaces the
+ * two decision helpers with the constant answers below, which is not the same
+ * as PRINT_FIT_WIDTH=0: the output is identical, but the code is gone. It is
+ * worth more than its own size, because pb_tf_measure() is the only other
+ * caller of pb_tf_locate() and pb_tf_print_scalar() -- the two largest helpers
+ * here -- and a second call site is what stops the compiler inlining them into
+ * the walk. Measured, the pass costs ~520 B of its own and ~1050 B in total.
+ *
+ * This is #if and not IS_ENABLED for the same reason the float paths are: the
+ * point is that nothing references the code, so none of it is emitted.
  * ---------------------------------------------------------------------------
  */
+
+#if defined(CONFIG_NANOPB_TEXTFORMAT_PRINT_FIT)
 
 /** A sink that counts bytes and keeps none of them. */
 struct pb_tf_ctr {
@@ -665,6 +689,7 @@ static size_t pb_tf_measure(struct pb_tf_printer *pr, const struct pb_tf_msg *tf
 	scratch.msg = msg;
 	scratch.index = 0U;
 	scratch.elem = 0U;
+	scratch.level = 0U;
 	scratch.flags = 0U;
 
 	for (i = first; (i < last) && !bad; i++) {
@@ -801,6 +826,36 @@ static bool pb_tf_list_expands(struct pb_tf_printer *pr, const struct pb_tf_pfra
 					 (uint16_t)(fr->index + 1U)));
 }
 
+#else /* !CONFIG_NANOPB_TEXTFORMAT_PRINT_FIT */
+
+/*
+ * Nothing is measured, so nothing folds: a multi-line style gives every
+ * submessage and every list element a line of its own, which is what
+ * PRINT_FIT_WIDTH=0 also produces. Compact is unaffected -- it folds
+ * everything by definition, and asks no question that needs an answer.
+ */
+
+static bool pb_tf_msg_inlines(struct pb_tf_printer *pr, const struct pb_tf_msg *sub,
+			      const void *src, size_t frame)
+{
+	ARG_UNUSED(sub);
+	ARG_UNUSED(src);
+	ARG_UNUSED(frame);
+
+	return pb_tf_compact(pr);
+}
+
+static bool pb_tf_list_expands(struct pb_tf_printer *pr, const struct pb_tf_pframe *fr,
+			       const struct pb_tf_field *row)
+{
+	ARG_UNUSED(fr);
+	ARG_UNUSED(row);
+
+	return !pb_tf_compact(pr);
+}
+
+#endif /* CONFIG_NANOPB_TEXTFORMAT_PRINT_FIT */
+
 static int pb_tf_run_print(struct pb_tf_printer *pr)
 {
 	while (true) {
@@ -932,6 +987,7 @@ static int pb_tf_run_print(struct pb_tf_printer *pr)
 		}
 
 		if (pb_tf_vtype_is_msg(row->vtype)) {
+			unsigned int level;
 			bool inl;
 
 			if (repeated) {
@@ -955,11 +1011,19 @@ static int pb_tf_run_print(struct pb_tf_printer *pr)
 			/* Advance before descending, so the pop needs no fixup. */
 			pb_tf_advance(fr, row, count);
 
+			/*
+			 * One level in from this body, and one more again when an
+			 * expanded list put the element on its own line.
+			 */
+			level = (unsigned int)fr->level + 1U +
+				(((fr->flags & PB_TF_PF_LIST_EXPAND) != 0U) ? 1U : 0U);
+
 			pr->top++;
 			pr->stack[pr->top].tf = row->sub;
 			pr->stack[pr->top].msg = src;
 			pr->stack[pr->top].index = 0U;
 			pr->stack[pr->top].elem = 0U;
+			pr->stack[pr->top].level = (uint8_t)level;
 			pr->stack[pr->top].flags = PB_TF_PF_FIRST;
 			if (inl) {
 				pr->stack[pr->top].flags |= PB_TF_PF_INLINE;
@@ -1009,6 +1073,7 @@ int pb_tf_print_styled(const struct pb_tf_msg *tf, const void *msg, cbprintf_cb 
 	pr.stack[0].msg = msg;
 	pr.stack[0].index = 0U;
 	pr.stack[0].elem = 0U;
+	pr.stack[0].level = 0U;
 	pr.stack[0].flags = PB_TF_PF_FIRST;
 
 	if (pr.braces) {

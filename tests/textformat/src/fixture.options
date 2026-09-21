@@ -16,6 +16,7 @@ fx_shapes.rep_string      max_count:2, max_size:8
 fx_shapes.fixed_scalar    max_count:2, fixed_count:true
 fx_shapes.c_str           max_size:8
 fx_shapes.rep_bytes       max_count:2, max_size:8
+fx_shapes.rep_deep        max_count:2
 
 # Wide enough to push a leaf past any FIT_WIDTH in the Kconfig range.
 fx_wide.pad               max_size:200

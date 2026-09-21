@@ -290,10 +290,11 @@ All figures measured on `mps2/an385` (Cortex-M3) at `-Os`, reproducible with `ju
 
 | | |
 |---|---|
-| Library code | **6173 B** — common 474, parse 3317, print 2382 |
-| print only (`PARSE=n`) | **2856 B** — drops 54% |
+| Library code | **6217 B** — common 474, parse 3317, print 2426 |
+| print only (`PARSE=n`) | **2900 B** — drops 53% |
 | parse only (`PRINT=n`) | **3791 B** — drops 39% |
-| with `FLOAT=n` | about 580 B less again — parse 2798, print 2323 |
+| with `PRINT_FIT=n` | **605 B less** — print 1821, library 5612 |
+| with `FLOAT=n` | about 580 B less again |
 | Per message descriptor | `12 × (fields + 1) + 12` bytes, plus the field names as strings |
 
 Either direction can be left out with `CONFIG_NANOPB_TEXTFORMAT_PARSE=n` or `_PRINT=n`. They are
@@ -334,7 +335,7 @@ and 16 for the printer, on top of a fixed frame. Measured:
 |---|---|---|
 | 1 | 160 B | 136 B |
 | **8 (default)** | **304 B** | **248 B** |
-| 32 (maximum) | 792 B | 632 B |
+| 32 (maximum) | 792 B | 640 B |
 
 Those are the entry frames. Add the deepest helper chain above them: ~60 B for the parser, and 232 B
 for the printer, which is the fit-or-expand measuring pass — `pb_tf_msg_inlines()` 48 B calling
@@ -342,6 +343,9 @@ for the printer, which is the fit-or-expand measuring pass — `pb_tf_msg_inline
 whatever `MAX_DEPTH` is**, which is the measurable form of the claim that measuring a node needs no
 second frame stack: it only ever walks a leaf body. The buffered entry points add a 32 B forwarding
 frame, and `pb_tf_parse()` / `pb_tf_merge()` 16 B.
+
+`PRINT_FIT=n` removes that chain entirely and folds the two helpers back into the walk, so printing
+becomes a single 264 B frame plus ~24 B — **about 320 B in total** rather than 512.
 
 Budget **about 400 bytes** for a parse and **about 520** for a print at the default depth, and see
 [Tips](#tips) for what that means for your thread stacks — usually your own output buffer matters
@@ -360,8 +364,8 @@ The sample — Zephyr, the shell, nanopb and this library — on `mps2/an385`:
 
 | | Flash | RAM |
 |---|---|---|
-| `FLOAT=y` (default) | 59 684 B | 12 166 B |
-| `FLOAT=n` | 51 484 B | 12 166 B |
+| `FLOAT=y` (default) | 59 728 B | 12 166 B |
+| `FLOAT=n` | 51 528 B | 12 166 B |
 
 Turning floats off saved 8.0 KB of flash here and **no RAM**, because what it removes is `strtod()`
 and cbprintf's floating-point formatting. Expect somewhere between 8 and 12 KB depending on how much
@@ -428,7 +432,8 @@ that guide used to recommend and no longer does.
 | `NANOPB_TEXTFORMAT_FLOAT` | `y` | Float and double support. `depends on !MINIMAL_LIBC` (needs `strtod`) and selects `CBPRINTF_FP_SUPPORT`. `n` makes float fields report `PB_TF_ERR_NO_FLOAT` in both directions and saves 8–12 KB of flash, depending on what else in the image formats floats |
 | `NANOPB_TEXTFORMAT_MAX_DEPTH` | `8` | Submessage nesting limit, range 1–32. Costs 20 bytes of stack per level |
 | `NANOPB_TEXTFORMAT_PRINT_SKIP_DEFAULTS` | `n` | Omit implicit-presence fields that are still zero |
-| `NANOPB_TEXTFORMAT_PRINT_FIT_WIDTH` | `64` | Columns below which the multi-line styles fold a submessage or list onto one line, indentation included. Range 0–255; `0` means strictly one field per line |
+| `NANOPB_TEXTFORMAT_PRINT_FIT` | `y` | Build the fit-or-expand measuring pass. `n` gives strictly one field per line and drops 605 B of flash and ~190 B of stack — more than the pass itself, because it is the only other caller of the printer's two largest helpers, and a second call site is what stops them being inlined |
+| `NANOPB_TEXTFORMAT_PRINT_FIT_WIDTH` | `64` | Columns below which the multi-line styles fold a submessage or list onto one line, indentation included. Range 0–255; `0` means strictly one field per line, but unlike `PRINT_FIT=n` it still compiles the pass |
 | `NANOPB_TEXTFORMAT_PARSE` | `y` | Build the two parsing functions. `n` drops 3317 B |
 | `NANOPB_TEXTFORMAT_PRINT` | `y` | Build the printer. `n` drops 2382 B |
 
@@ -503,11 +508,11 @@ forced it.
 
 ## Versioning
 
-[Semantic versioning](https://semver.org). The current version is **0.8.0**.
+[Semantic versioning](https://semver.org). The current version is **0.8.1**.
 
 **Major is 0, and that is meant literally: the API can change, and has.** Not because the library is
-unfinished — it is feature-complete against its design, with 1152 test cases across 18
-configurations on two boards, plus 576 more on native_sim under glibc — but because it is young
+unfinished — it is feature-complete against its design, with 1396 test cases across 20
+configurations on two boards, plus 698 more on native_sim under glibc — but because it is young
 enough that better shapes keep
 turning up, usually from someone integrating it:
 
@@ -520,6 +525,7 @@ turning up, usually from someone integrating it:
 | 0.6.0 | **replaced** the print functions with eight style-named ones, **removed** the `_t` typedefs, and switched to `int` returns |
 | 0.7.0 | added `pb_tf_print_styled()` / `pb_tf_print_buf_styled()` for a run-time style choice; the eight named forms became `static inline` wrappers over them |
 | 0.8.0 | **changed printed output**: repeated fields fold into bracket lists, and the multi-line styles became fit-or-expand. No signature moved |
+| 0.8.1 | made the fit-or-expand pass optional (`PRINT_FIT`), and fixed the indentation of a list element that breaks across lines |
 
 Both removals were minor bumps. That is correct semver for 0.x — a breaking change does not force a
 major bump until 1.0 — but it does mean **`revision: main` will eventually break your build**. Pin a

@@ -51,9 +51,9 @@ extern "C" {
 /**@{*/
 #define NANOPB_TEXTFORMAT_VERSION_MAJOR 0
 #define NANOPB_TEXTFORMAT_VERSION_MINOR 8
-#define NANOPB_TEXTFORMAT_VERSION_PATCH 0
+#define NANOPB_TEXTFORMAT_VERSION_PATCH 1
 
-#define NANOPB_TEXTFORMAT_VERSION_STRING "0.8.0"
+#define NANOPB_TEXTFORMAT_VERSION_STRING "0.8.1"
 
 /**
  * @brief Version as @c 0xMMmmpp, for comparison.
@@ -222,6 +222,7 @@ struct pb_tf_status {
  * now, so a build states its intent once instead of at every call site:
  *
  *   CONFIG_NANOPB_TEXTFORMAT_PRINT_SKIP_DEFAULTS
+ *   CONFIG_NANOPB_TEXTFORMAT_PRINT_FIT
  *   CONFIG_NANOPB_TEXTFORMAT_PRINT_FIT_WIDTH
  *
  * pb_tf_parse() versus pb_tf_merge(), and the line style and braces by function
